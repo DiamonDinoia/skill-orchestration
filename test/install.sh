@@ -88,8 +88,9 @@ check "manual skills on disk (all 5)" on_disk5 "$manual/.claude/skills"
 # The opencode helper script links only opencode's own directories.
 check "install-opencode.sh runs" bash "$repo/install-opencode.sh"
 check "install-opencode.sh: 5 opencode skills" on_disk5 ~/.config/opencode/skills
-check "install-opencode.sh: command + 4 tier agents" bash -c \
-  '[ -e ~/.config/opencode/commands/manager.md ] && for t in intern junior senior principal; do [ -e ~/.config/opencode/agents/$t.md ] || exit 1; done'
+check "install-opencode.sh: 5 commands + 4 tier agents" bash -c \
+  'for c in manager team brainstorm spec parallel; do [ -e ~/.config/opencode/commands/$c.md ] || exit 1; done &&
+   for t in intern junior senior principal; do [ -e ~/.config/opencode/agents/$t.md ] || exit 1; done'
 
 # The parallel wave scheduler ships inside the plugin and self-tests from the installed copy.
 waves=$(find ~/.claude/plugins -path "*skills/parallel/scripts/waves.py" | head -1)

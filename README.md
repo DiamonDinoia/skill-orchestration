@@ -32,7 +32,7 @@ rule-only harnesses have no session hook and keep their own defaults.
 
 The three harnesses with a native manifest carry one in this repository: `.claude-plugin/` for
 Claude Code, `.codex-plugin/` for Codex, and `gemini-extension.json` for Gemini CLI. opencode has
-no plugin system — `install-opencode.sh` links the five skills, the `/manager` command and the
+no plugin system — `install-opencode.sh` links the five skills, the five command shims and the
 tier agents from a checkout; anything else: symlink by hand (last row).
 
 Rule-only harnesses (Cursor rules, Cline, Windsurf, Kiro, Qoder, Grok, Devin, ...) receive the
