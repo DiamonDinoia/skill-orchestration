@@ -77,14 +77,15 @@ the work out, it makes sure the harness of the child has each skill installed. I
 missing, a first cheap work batch installs it from its source, and the work batch starts
 after it. The install batch is exempt from this preflight: it needs no skills, it only
 installs. The child gets the skills through the mechanism of that harness. The brief names
-them. The standing writing skills (`ste`, `unslop`) and the ponytail mode go to each child.
+them. The standing skills that the harness config names go to every child.
 
 ## Parallel by default
 
 Cut the work into deliverables with disjoint file scopes. A job whose checks run tests,
-builds, generators or commit hooks gets its own `git worktree`. A job that only edits and
-commits text may share the tree and commits only its own paths (`git commit -- <paths>`,
-retry on index.lock). One fresh reviewer for each deliverable, all in
+builds or generators gets its own `git worktree`, and so does every job if the repo has
+commit hooks. A job that only edits and commits text may share the tree when the repo has no
+commit hooks. It commits only its own paths (`git commit -- <paths>`; retry on index.lock
+up to 5 times, then escalate; never delete the lock). One fresh reviewer for each deliverable, all in
 parallel. Then one more fresh reviewer gets the combined change set of the full task and
 checks that the pieces fit: no contradictions between files, one name for each concept, no
 logic duplicated across deliverables, the same behaviour for the same condition everywhere,
