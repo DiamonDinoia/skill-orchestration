@@ -75,14 +75,16 @@ engineer. The standing rules in `~/.claude/CLAUDE.md` bind every subagent.
 For each deliverable the manager names the skills the work needs. Before the manager sends
 the work out, it makes sure the harness of the child has each skill installed. If one is
 missing, a first cheap work batch installs it from its source, and the work batch starts
-after it. The child gets the skills through the mechanism of that harness. The brief names
+after it. The install batch is exempt from this preflight: it needs no skills, it only
+installs. The child gets the skills through the mechanism of that harness. The brief names
 them. The standing writing skills (`ste`, `unslop`) and the ponytail mode go to each child.
 
 ## Parallel by default
 
-Cut the work into deliverables with disjoint file scopes. Start each independent deliverable
-in the same turn. Work in one repo commits only its own paths (`git commit -- <paths>`,
-retry on index.lock), not one at a time. One fresh reviewer for each deliverable, all in
+Cut the work into deliverables with disjoint file scopes. A job whose checks run tests,
+builds, generators or commit hooks gets its own `git worktree`. A job that only edits and
+commits text may share the tree and commits only its own paths (`git commit -- <paths>`,
+retry on index.lock). One fresh reviewer for each deliverable, all in
 parallel. Then one more fresh reviewer gets the combined change set of the full task and
 checks that the pieces fit: no contradictions between files, one name for each concept, no
 logic duplicated across deliverables, the same behaviour for the same condition everywhere,
