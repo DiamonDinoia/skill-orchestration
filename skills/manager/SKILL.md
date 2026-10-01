@@ -86,6 +86,8 @@ checks that the pieces fit: no contradictions between files, one name for each c
 logic duplicated across deliverables, the same behaviour for the same condition everywhere,
 docs and code agree. Its findings become fix deliverables like other findings.
 
+If the harness has a binding skill for tiers and models, load it.
+
 ## Context budget (hard rules)
 
 1. A subagent report is at most 30 lines. Longer goes back for compression; it is

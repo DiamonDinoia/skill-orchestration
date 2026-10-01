@@ -70,6 +70,26 @@ not listed is out of scope), and the report contract below. A conflict between a
 prompt's checks and its file instructions is resolved by the manager, never the
 engineer. The standing rules in `~/.claude/CLAUDE.md` bind every subagent.
 
+## Skill preflight
+
+For each deliverable the manager names the skills the work needs. Before the manager sends
+the work out, it makes sure the harness of the child has each skill installed. If one is
+missing, a first cheap work batch installs it from its source, and the work batch starts
+after it. The child gets the skills through the mechanism of that harness. The brief names
+them. The standing writing skills (`ste`, `unslop`) and the ponytail mode go to each child.
+
+## Parallel by default
+
+Cut the work into deliverables with disjoint file scopes. Start each independent deliverable
+in the same turn. Work in one repo commits only its own paths (`git commit -- <paths>`,
+retry on index.lock), not one at a time. One fresh reviewer for each deliverable, all in
+parallel. Then one more fresh reviewer gets the combined change set of the full task and
+checks that the pieces fit: no contradictions between files, one name for each concept, no
+logic duplicated across deliverables, the same behaviour for the same condition everywhere,
+docs and code agree. Its findings become fix deliverables like other findings.
+
+If the harness has a binding skill for tiers and models, load it.
+
 ## Context budget (hard rules)
 
 1. A subagent report is at most 30 lines. Longer goes back for compression; it is
