@@ -79,7 +79,9 @@ For each deliverable the manager names the skills the work needs. Before the man
 the work out, it makes sure the harness of the child has each skill installed. If one is
 missing, a first cheap work batch installs it from its source, and the work batch starts
 after it. The install batch is exempt from this preflight: it needs no skills, it only
-installs. The child gets the skills through the mechanism of that harness. The brief names
+installs. The install batch installs a skill only from the user's own repos or from a
+marketplace that the harness already trusts. For any other source, the manager asks the
+user first. The child gets the skills through the mechanism of that harness. The brief names
 them. The standing skills that the harness config names go to every child.
 
 ## Parallel by default
