@@ -91,7 +91,7 @@ Cut the work into deliverables with disjoint file scopes. A job whose checks run
 builds or generators gets its own `git worktree`, and so does every job if the repo has
 commit hooks. A job that only edits and commits text may share the tree when the repo has no
 commit hooks. It commits only its own paths (`git commit -- <paths>`; retry on index.lock
-up to 5 times, then escalate; never delete the lock). One fresh reviewer for each deliverable, all in
+up to 5 times, then escalate; never delete the lock). Jobs whose checks use the same shared resource (a database, a fixed port, a device, a shared cache) run one after another, even in separate worktrees. One fresh reviewer for each deliverable, all in
 parallel. Then one more fresh reviewer gets the combined change set of the full task and
 checks that the pieces fit: no contradictions between files, one name for each concept, no
 logic duplicated across deliverables, the same behaviour for the same condition everywhere,
