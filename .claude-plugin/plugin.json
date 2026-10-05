@@ -1,10 +1,19 @@
 {
   "name": "orchestration",
   "description": "Orchestration suite for agent harnesses: manager (persistent tier-dispatch role), team (multi-agent rounds in worktrees), brainstorm (decision exploration), spec (deliverable+check specifications), parallel (wave-scheduled execution of a spec).",
-  "version": "1.1.1",
-  "author": { "name": "Marco Barbone", "url": "https://github.com/DiamonDinoia" },
+  "version": "1.2.0",
+  "author": {
+    "name": "Marco Barbone",
+    "url": "https://github.com/DiamonDinoia"
+  },
   "homepage": "https://github.com/DiamonDinoia/skill-orchestration",
   "repository": "https://github.com/DiamonDinoia/skill-orchestration",
   "license": "MIT",
-  "keywords": ["orchestration", "subagents", "multi-agent", "planning", "productivity"]
+  "keywords": [
+    "orchestration",
+    "subagents",
+    "multi-agent",
+    "planning",
+    "productivity"
+  ]
 }

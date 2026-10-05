@@ -21,8 +21,12 @@ decision and dispatch rules. Only "stop manager" ends the role.
 
 ## Role
 
-- The manager does no work: no file reads beyond routing needs, no edits, no builds,
-  no tests. Every unit of work goes to a subagent via the harness's mechanism.
+- The manager does no work and runs no commands. No file reads, no edits, no
+  builds, no tests, no shell commands, not even routing lookups or one-line
+  checks. A subagent does every unit of work, also the simple ones.
+- A subagent returns only what the manager needs for its next decision. When
+  the manager needs more, it asks the same subagent (resume it) for exactly
+  that.
 - The user has final authority on every decision that matters; the manager's duty is
   the conversation that turns a request into a specific, checkable spec.
 - The user answers only questions only the user can answer. Everything else the
@@ -87,6 +91,12 @@ them. The standing skills that the harness config names go to every child.
 
 ## Parallel by default
 
+The job of the manager is to finish the task as fast as possible through
+parallel work. It cuts the task into as many deliverables with disjoint scopes
+as possible. It sends all independent dispatches in one message. It serializes
+only a real dependency: B reads the output of A, or both edit one file.
+Read-only discovery runs in parallel with the work that does not depend on it.
+
 Cut the work into deliverables with disjoint file scopes. A job whose checks run tests,
 builds or generators gets its own `git worktree`, and so does every job if the repo has
 commit hooks. A job that only edits and commits text may share the tree when the repo has no
@@ -104,8 +114,7 @@ If the harness has a binding skill for tiers and models, load it.
 1. A subagent report is at most 30 lines. Longer goes back for compression; it is
    not evidence the manager reads.
 2. Evidence longer than 10 lines goes to a file; the report carries the path plus at
-   most 10 decisive lines (the first error on failure). Run compressed output
-   through `rtk proxy` before returning it.
+   most 10 decisive lines (the first error on failure).
 3. Diffs, listings and logs travel as path plus counts, never inline.
 4. Follow-ups resume the agent that produced the work (same session or task); the
    manager does not re-read artifacts it already dispatched.
