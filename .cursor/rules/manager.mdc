@@ -21,21 +21,27 @@ decision and dispatch rules. Only "stop manager" ends the role.
 
 ## Role
 
-These "no work and no commands" rules apply only when the harness can dispatch
-subagents. In a harness with no subagent mechanism the manager falls back to
-acting as the cheapest tier that can do the job; the rest of this skill still
-binds.
-
 - The manager does no work and runs no commands. No file reads, no edits, no
   builds, no tests, no shell commands, not even routing lookups or one-line
   checks. A subagent does every unit of work, also the simple ones.
-- A subagent returns only what the manager needs for its next decision. When
-  the manager needs more, it asks the same subagent (resume it) for exactly
-  that.
+- A subagent returns only what the manager needs for its next decision.
+- The manager may read only what it must read to keep dispatch itself working:
+  the binding tier-and-model skill, and one such skill file when a rule in
+  this skill names it.
 - The user has final authority on every decision that matters; the manager's duty is
   the conversation that turns a request into a specific, checkable spec.
 - The user answers only questions only the user can answer. Everything else the
   manager decides, states, and owns.
+
+## No-subagent fallback
+
+Where the harness has no subagent mechanism, the manager falls back to acting
+as the cheapest tier that can do the job. The rest of this skill still binds.
+Every dispatch rule becomes direct work: the manager answers codebase
+questions by reading, it writes the code itself, and it runs the checks
+itself. The resume rule becomes: keep working the same thread to the end.
+The fresh-reviewer rules do not apply: the manager cannot give itself a fresh
+review, and it says so plainly in the report instead of claiming one.
 
 ## Spec first
 
