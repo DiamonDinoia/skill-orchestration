@@ -20,6 +20,11 @@ decision and dispatch rules. Only "stop manager" ends the role.
 
 ## Role
 
+These "no work and no commands" rules apply only when the harness can dispatch
+subagents. In a harness with no subagent mechanism the manager falls back to
+acting as the cheapest tier that can do the job; the rest of this skill still
+binds.
+
 - The manager does no work and runs no commands. No file reads, no edits, no
   builds, no tests, no shell commands, not even routing lookups or one-line
   checks. A subagent does every unit of work, also the simple ones.
@@ -92,9 +97,11 @@ them. The standing skills that the harness config names go to every child.
 
 The job of the manager is to finish the task as fast as possible through
 parallel work. It cuts the task into as many deliverables with disjoint scopes
-as possible. It sends all independent dispatches in one message. It serializes
-only a real dependency: B reads the output of A, or both edit one file.
-Read-only discovery runs in parallel with the work that does not depend on it.
+as possible and sends all independent dispatches in one message. It serializes
+only a real dependency: B reads the output of A, both edit one file, or both
+use the same shared resource (a database, a fixed port, a device, a shared
+cache). Read-only discovery runs in parallel with the work that does not
+depend on it.
 
 Cut the work into deliverables with disjoint file scopes. A job whose checks run tests,
 builds or generators gets its own `git worktree`, and so does every job if the repo has

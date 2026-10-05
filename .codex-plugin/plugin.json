@@ -2,20 +2,11 @@
   "name": "orchestration",
   "version": "1.2.0",
   "description": "Orchestration suite for agent harnesses: manager (persistent tier-dispatch role), team (multi-agent rounds in worktrees), brainstorm (decision exploration), spec (deliverable+check specifications), parallel (wave-scheduled execution of a spec).",
-  "author": {
-    "name": "Marco Barbone",
-    "url": "https://github.com/DiamonDinoia"
-  },
+  "author": { "name": "Marco Barbone", "url": "https://github.com/DiamonDinoia" },
   "homepage": "https://github.com/DiamonDinoia/skill-orchestration",
   "repository": "https://github.com/DiamonDinoia/skill-orchestration",
   "license": "MIT",
-  "keywords": [
-    "orchestration",
-    "subagents",
-    "multi-agent",
-    "planning",
-    "productivity"
-  ],
+  "keywords": ["orchestration", "subagents", "multi-agent", "planning", "productivity"],
   "skills": "./skills/",
   "interface": {
     "displayName": "Orchestration",
@@ -23,11 +14,7 @@
     "longDescription": "Five skills that share one pipeline: brainstorm explores a decision (recon dispatch, batched questions with recommendations, decision log), spec turns it into deliverables each with a check that can fail, parallel executes the spec as disjoint wave-scheduled units, team runs multi-agent rounds in worktrees, and manager is the persistent tier-dispatch role the others build on.",
     "developerName": "Marco Barbone",
     "category": "Developer Tools",
-    "capabilities": [
-      "Interactive",
-      "Read",
-      "Write"
-    ],
+    "capabilities": ["Interactive", "Read", "Write"],
     "websiteURL": "https://github.com/DiamonDinoia/skill-orchestration",
     "defaultPrompt": [
       "/manager implement the auth refactor",
