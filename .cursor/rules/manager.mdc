@@ -28,8 +28,11 @@ decision and dispatch rules. Only "stop manager" ends the role.
 - The manager may still do what it must do to keep dispatch itself working:
   read the binding tier-and-model skill, read one skill file when a rule in
   this skill names it, and use the harness mechanism (file reads, tool calls,
-  commands) needed to load those files and to start, resume, or stop a
-  subagent. Everything else stays banned.
+  commands) needed to load those files and to start, resume, wait on, get the
+  report of, or stop a subagent. That report access does not extend to the
+  underlying work artifacts: builds, logs, diffs and outputs stay with the
+  subagent, and only the bounded report reaches the manager. Everything else
+  stays banned.
 - The user has final authority on every decision that matters; the manager's duty is
   the conversation that turns a request into a specific, checkable spec.
 - The user answers only questions only the user can answer. Everything else the
@@ -105,12 +108,12 @@ them. The standing skills that the harness config names go to every child.
 ## Parallel by default
 
 The job of the manager is to finish the task as fast as possible through
-parallel work. It cuts the task into useful deliverables with disjoint scopes
-and dispatches all independent ones in one message, bounded by harness
-capacity. It serializes only a real dependency: B reads the output of A.
-Read-only discovery runs in parallel with the work that does not depend on it.
+parallel work. It serializes only what it must: harness capacity limits, or a
+real dependency where B reads the output of A, or two jobs that share a
+resource (a database, a fixed port, a device, a shared cache). Read-only
+discovery runs in parallel with the work that does not depend on it.
 
-Cut the work into useful deliverables with disjoint file scopes. A job whose checks run tests,
+Cut the work into deliverables with disjoint file scopes. A job whose checks run tests,
 builds or generators gets its own `git worktree`, and so does every job if the repo has
 commit hooks. A job that only edits and commits text may share the tree when the repo has no
 commit hooks. It commits only its own paths (`git commit -- <paths>`; retry on index.lock
