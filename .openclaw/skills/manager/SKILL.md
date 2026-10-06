@@ -144,12 +144,14 @@ If the harness has a binding skill for tiers and models, load it.
    the user per batch; questions and user decisions are batched the same way.
 6. When the harness runs more than one child at a time, the manager keeps one slot free for the inspector. When the harness has only one slot, the manager does not inspect and the stall rule uses the child's deadline only. Every 15 minutes the manager inspects only the children that are still running and have not reported back in
    that window. The manager does not read transcripts itself. It dispatches a cheap read-only subagent that
-   reads the tail of the child's transcript and reports at most 5 lines: progressing, waiting, or hung.
+   reads the tail of the child's transcript and checks the liveness of the child's harness
+   and tool processes. The subagent reports at most 5 lines: the liveness it observed
+   (running, not running, or unknown) and the state of the transcript: progressing, waiting, or hung.
    Transcript silence alone never stops a child. The manager steers a running child at any time with a changed
    requirement, even if the child is making progress. A brief
    without a deadline carries a default deadline of 60 minutes. The stall and deadline rule governs stopping a
    child for being hung: the manager stops a hung child when inspection shows no progress at two checks in a
-   row and no running process, or when the child's deadline has passed. The manager stops a child at
+   row and liveness is not running (unknown liveness counts as running), or when the child's deadline has passed. The manager stops a child at
    any time when the user cancels it, or when the child's work is unsafe. It leaves every
    other child alone.
 
