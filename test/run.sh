@@ -14,6 +14,10 @@ run() { "$engine" run --rm -v "$1:/repo:ro" -v "$root/test/install.sh:/install.s
 echo "== repository"
 run "$root"
 
+# All manifest version fields must be equal.
+versions=$(grep -h '"version"' "$root"/.*-plugin/plugin.json "$root"/gemini-extension.json | sort -u | wc -l)
+[ "$versions" -eq 1 ] || { echo "FAIL: manifest versions differ"; exit 1; }
+
 echo "== positive control: skills/team/SKILL.md name 'TEAM_bad' must fail"
 bad=$(mktemp -d)
 trap 'rm -rf "$bad"' EXIT
