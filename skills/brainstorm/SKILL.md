@@ -35,6 +35,7 @@ recon; dispatch it and take the answer).
 ## Recon and context budget
 
 - Recon runs on subagents only. A recon report is at most 30 lines; longer goes back for compression.
+- A child that cannot dispatch recon subagents requests recon from its parent instead.
 - Evidence longer than 10 lines goes to a file; the report carries the path plus the decisive lines.
 - The brainstormer never loads raw logs, listings or diffs into its own context.
 
@@ -42,6 +43,7 @@ recon; dispatch it and take the answer).
 
 - Ask only what only the user can answer: priorities, taste, external constraints. Anything readable or
   measurable in the codebase is recon, never a question.
+- Inside a child, the parent takes the user's role as a communication proxy: it answers only from existing user instructions and escalates user-only decisions and consent requests to the user.
 - Every question carries a recommended answer.
 - All questions go in one message. A second round exists only when an answer opened a genuinely new
   interpretation; it is not a licence for trickle questions.

@@ -7,11 +7,11 @@ argument-hint: "[interview|plan|execute|review]"
 
 # Team
 
-Team runs one task as rounds. The manager splits the task into subproblems. Critics attack the split before any work starts. Engineers execute subproblems, each in its own git worktree. Reviewers validate and prune the work. The manager merges with consent. The manager re-splits what remains. The loop ends when every deliverable in `.claude/team.md` passes on the integration branch.
+Team runs one task as rounds. The manager splits the task into subproblems. Critics attack the split before any work starts. Engineers execute subproblems, each in its own git worktree. Reviewers validate and prune the work. The manager merges with consent. The manager re-splits what remains. The loop ends when every deliverable in the run's state file passes on the integration branch.
 
 ## Manager role
 
-The invoking agent assumes the manager role for the run. Where `../manager/SKILL.md` is present, its Role, Dispatch tiers, Context budget and Report contract rules bind this run too. Where that file is absent (standalone install), the Roles and harness mapping below stands alone.
+The invoking agent assumes the manager role for the run. Where `../manager/SKILL.md` is present, its Role, Dispatch tiers, Free-tier children, Context budget and Report contract rules bind this run too. Where that file is absent (standalone install), the Roles and harness mapping below stands alone. Inside a child, the parent takes the user's role as a communication proxy: it answers only from existing user instructions and escalates user-only decisions and consent requests to the user.
 
 ## Triage
 
@@ -42,7 +42,7 @@ Produce deliverables a reviewer can check without contacting the user. Invocatio
 4. If the state file has no Dispatch preferences, decide concurrency (parallel or one-at-a-time) and engineer dispatch (dispatched or manager-inline) and record both in the state file. Both are reversible, so the manager decides them instead of asking the user.
 5. Summarize the deliverables to the user. Interview ends after the summary.
 
-Open trade-offs that surface through interview questions — multiple live interpretations, or a trade-off no experiment settles — run the brainstorm protocol in `../brainstorm/SKILL.md` first: recon by dispatch, enumerate the interpretations, one batched question round carrying a recommended answer each. The decision log feeds the deliverables.
+Open trade-offs that surface through interview questions — multiple live interpretations, or a trade-off no experiment settles — run the brainstorm protocol of the `brainstorm` skill first: recon by dispatch, enumerate the interpretations, one batched question round carrying a recommended answer each. The decision log feeds the deliverables.
 
 ## Plan
 
@@ -60,12 +60,12 @@ Plan writes the state file only. Plan writes no code. Plan ends when the split i
 
 Run one round at a time. Invocation: `/team execute`.
 
-1. Record the starting branch in Notes. If `team/integration` does not exist, create it: `git checkout -b team/integration`.
+1. Record the starting branch in Notes. Read the state file's Integration branch and Integration checkout fields. If they are empty, the run is top-level: record the branch as `team/integration` and the checkout as the path of the user's checkout. Check out the integration branch in the recorded integration checkout, whether the branch exists or is new: `git -C "<integration checkout>" checkout <integration branch>`, or `git -C "<integration checkout>" checkout -b <integration branch>` when it does not exist. The merge of step 10 never ends up on another branch, such as `main`. A team run inside another team run is not supported yet, so an engineer in a team run does not start its own team run.
 2. Select subproblems whose dependencies are done.
 3. Create one worktree per engineer, pinned to the current integration commit:
 
 ```bash
-BASE=$(git rev-parse team/integration)
+BASE=$(git rev-parse <integration branch>)
 git worktree add ../<repo>-team-<round>-<role> -b team/<round>-<role> "$BASE"
 ```
 
@@ -77,19 +77,17 @@ git worktree add ../<repo>-team-<round>-<role> -b team/<round>-<role> "$BASE"
 7. Dispatch one reviewer per worktree that produced a report, with the Reviewer prompt template. A reviewer never reviews work it wrote. Worktrees without a report get no review; re-dispatch or end-of-run cleanup removes them.
 8. Apply verdicts. ACCEPT passes. PRUNE: the manager removes the listed edits in the worktree and re-runs the check before the merge. REJECT: record the failure and return the subproblem to the pool.
 9. A re-dispatched subproblem first removes the stale worktree and branch: `git worktree remove --force <previous worktree path>`, then `git branch -D <previous branch name>`. Then it gets a fresh worktree per step 3 and a new branch `team/<round>-<role>-<attempt>`; `<attempt>` counts the dispatches of that subproblem in the current round and starts at 2.
-10. Rebase the engineer's branch onto `team/integration`, then fast-forward `team/integration` onto it, after user consent for the round:
+10. Rebase the engineer's branch onto the run's integration branch, then fast-forward the integration branch onto it, after user consent for the round. Rebase inside the engineer's worktree, where the branch is checked out. Merge inside the recorded integration checkout, which has the integration branch checked out. Before the merge, check the integration checkout is on the integration branch with `git -C "<integration checkout>" rev-parse --abbrev-ref HEAD`; if it is not, stop. Then:
 
 ```bash
-git checkout <branch>
-git rebase team/integration
-git checkout team/integration
-git merge --ff-only <branch>
+git -C "<engineer worktree>" rebase <integration branch>
+git -C "<integration checkout>" merge --ff-only <branch>
 ```
 
 `<branch>` is the accepted branch: `team/<round>-<role>`, or `team/<round>-<role>-<attempt>` after a retry. The manager resolves conflicts during the rebase inside the conflicted hunks only.
 11. Update the state file: subproblem statuses, round verdicts, decisions.
 12. If deliverables remain open, re-split from the remaining state (Plan, including its critique pass) and start the next round.
-13. Dispatch a fresh reviewer with the deliverables, the Verification command, and the `team/integration` checkout path. The reviewer runs every deliverable check plus the build-and-test command. All green marks every deliverable done in the state file and ends `/team execute`. Any failure reopens that deliverable and returns the run to step 12. A deliverable fails at most twice here; the third failure escalates to the user.
+13. Dispatch a fresh reviewer with the deliverables, the Verification command, and the run's integration checkout path. The reviewer runs every deliverable check plus the build-and-test command. All green marks every deliverable done in the state file and ends `/team execute`. Any failure reopens that deliverable and returns the run to step 12. A deliverable fails at most twice here; the third failure escalates to the user.
 
 ## Review
 
@@ -97,7 +95,7 @@ Review audits. Review never edits. Invocation: `/team review`.
 
 1. Dispatch fresh-context reviewers that did not write the work.
 2. Run every deliverable check from the state file. Never trust a checked box.
-3. List dead worktrees with `git worktree list` and unmerged branches with `git branch --no-merged team/integration`.
+3. List dead worktrees with `git worktree list` and unmerged branches with `git branch --no-merged <integration branch>`.
 4. Compare the state file against the repo. Every Split row's Status must match its branch state.
 5. Report ranked findings, then end with `REVIEW CLEAN` or the findings list. `/team review` ends there.
 
@@ -121,6 +119,10 @@ One paragraph: what, why, the expected end state.
 ### Dispatch preferences
 - Concurrency: parallel | one-at-a-time
 - Engineers: dispatched | inline
+
+### Integration
+- Branch: team/integration
+- Checkout: <path of the integration checkout>
 
 ### Pool
 | Role | Specialty |
@@ -213,7 +215,7 @@ Verify the finished run.
 
 Deliverables: <deliverable list>
 Verification: <build-and-test command>
-Checkout: <path of the team/integration checkout>
+Checkout: <path of the run's integration checkout>
 
 Run every deliverable check. Run the Verification command. Report ALL GREEN or the failing items.
 ```

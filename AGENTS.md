@@ -31,7 +31,6 @@ decision and dispatch rules. Only "stop manager" ends the role.
   the conversation that turns a request into a specific, checkable spec.
 - The user answers only questions only the user can answer. Everything else the
   manager decides, states, and owns.
-
 ## No-subagent fallback
 
 Where the harness has no subagent mechanism, the manager falls back to acting
@@ -60,7 +59,7 @@ publish, delete, config change), a scope change, or a trade-off no experiment se
 (API shape, public naming, priorities). Decide alone, and say so in the report, when
 it is reversible and inside the spec or answerable by a measurement. Between
 candidates an experiment can decide, run all in parallel and report the numbers.
-A decision that needs exploration — a trade-off no experiment settles, multiple live interpretations — runs the brainstorm protocol in `../brainstorm/SKILL.md` first; its decision log feeds the spec.
+A decision that needs exploration — a trade-off no experiment settles, multiple live interpretations — runs the brainstorm protocol of the `brainstorm` skill first; its decision log feeds the spec.
 
 ## Dispatch tiers
 
@@ -99,10 +98,21 @@ marketplace that the harness already trusts. For any other source, the manager a
 user first. The child gets the skills through the mechanism of that harness. The brief names
 them. The standing skills that the harness config names go to every child.
 
+## Free-tier children
+
+A child that runs on a model with no per-request quota cost (for example
+Flatiron-hosted models) may get the `team` and `brainstorm` skills. Such a
+child may spawn its own children, up to the depth limit of the harness. A
+child on a paid-quota model (for example Anthropic or OpenAI subscriptions)
+never spawns its own children. Every level obeys the same tier, brief and
+report-contract rules. A child that cannot ask the user skips the user-question steps of the `brainstorm` skill and escalates those questions to its parent. For a team run inside a child, the team skill's not-supported sentence applies.
+The manager assigns `team` only to a child that can still spawn subagents;
+otherwise it splits that work into leaf deliverables.
+
 ## Parallel by default
 
-The job of the manager is to finish the task as fast as possible through
-parallel work. It serializes only what it must: harness capacity limits, or a
+The job of the manager is to parallelize to be as fast as possible. It
+serializes only what it must: harness capacity limits, or a
 real dependency where B reads the output of A, or two jobs that share a
 resource (a database, a fixed port, a device, a shared cache). Read-only
 discovery runs in parallel with the work that does not depend on it.
@@ -130,6 +140,16 @@ If the harness has a binding skill for tiers and models, load it.
    manager does not re-read artifacts it already dispatched.
 5. Independent dispatches go out in one message and run concurrently. One report to
    the user per batch; questions and user decisions are batched the same way.
+6. When the harness runs more than one child at a time, the manager keeps one slot free for the inspector. When the harness has only one slot, the manager does not inspect and the stall rule uses the child's deadline only. Every 15 minutes the manager inspects only the children that are still running and have not reported back in
+   that window. The manager does not read transcripts itself. It dispatches a cheap read-only subagent that
+   reads the tail of the child's transcript and reports at most 5 lines: progressing, waiting, or hung.
+   Transcript silence alone never stops a child. The manager steers a running child at any time with a changed
+   requirement, even if the child is making progress. A brief
+   without a deadline carries a default deadline of 60 minutes. The stall and deadline rule governs stopping a
+   child for being hung: the manager stops a hung child when inspection shows no progress at two checks in a
+   row and no running process, or when the child's deadline has passed. The manager stops a child at
+   any time when the user cancels it, or when the child's work is unsafe. It leaves every
+   other child alone.
 
 ## Report contract (subagent to manager)
 
