@@ -1,6 +1,6 @@
 ---
 name: spec
-description: Use when the user says "write a spec" or "specify", or arrives from a brainstorm with a decision log in hand. Turns a request into deliverables with checks that can fail, iterated with the user until accepted, then written to the memory logbook.
+description: Use when the user says "write a spec" or "specify": turns a request or decision log into deliverables with checks.
 license: MIT
 ---
 

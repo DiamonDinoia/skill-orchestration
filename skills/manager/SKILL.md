@@ -1,6 +1,6 @@
 ---
 name: manager
-description: Use when the user types /manager, says "act as manager" or "orchestrate this", or asks for one orchestrator that pins down a checkable spec with the user, dispatches every unit of work to subagents by difficulty tier, and keeps its own context small. Persistent session role; "stop manager" ends it.
+description: Use when the user says /manager or "act as manager": pin a checkable spec, route every unit to subagents.
 ---
 
 # Manager

@@ -1,6 +1,6 @@
 ---
 name: brainstorm
-description: Use when the user says "brainstorm", "help me decide" or "think this through", or brings an early or vague design or feature intent whose shape is still open. Conversation-only; the outcome is a decision log that feeds a spec.
+description: Use when the user says "brainstorm" or "help me decide": settle open design decisions into a decision log first.
 license: MIT
 ---
 

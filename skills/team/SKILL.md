@@ -1,6 +1,6 @@
 ---
 name: team
-description: Iterative multi-agent orchestration for one task, run as rounds. The manager splits the task, critics attack the split, engineers execute in worktrees, reviewers validate, and the manager merges and re-splits until every deliverable passes.
+description: Rounds-based multi-agent orchestration for one task: manager splits, critics attack, engineers execute, reviewers validate.
 disable-model-invocation: true
 argument-hint: "[interview|plan|execute|review]"
 ---

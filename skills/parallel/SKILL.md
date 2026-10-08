@@ -1,6 +1,6 @@
 ---
 name: parallel
-description: Use when the user says "run in parallel" or "parallel-execute", or holds an approved spec or plan whose units touch disjoint files. Splits the work into one concurrent dispatch wave, integrates the results, and re-splits what is left.
+description: Use when the user says "run in parallel": parallel-execute an approved spec whose units touch disjoint files.
 license: MIT
 ---
 
