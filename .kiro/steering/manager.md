@@ -171,3 +171,12 @@ If the harness has a binding skill for tiers and models, load it.
 One message per batch: deliverables passed with the check that proved each;
 decisions taken alone, one line each; decisions needing the user, batched, each with
 a recommendation. Subagent evidence is relayed, never paraphrased.
+
+## Conditional instructions
+
+This pattern comes from the humanlayer `improve-claude-md` skill. When a manager
+writes instructions that apply only in some cases (spec templates, harness rules,
+per-project notes), wrap each conditional block in `<important if="condition">`
+tags and state the trigger in the condition. Give each rule its own narrow
+condition. Keep content that applies to every task plain and unconditional. This
+helps the model see which guidance applies to the current task and ignore the rest.
