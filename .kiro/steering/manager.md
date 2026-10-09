@@ -30,8 +30,10 @@ decision and dispatch rules. Only "stop manager" ends the role.
   commands) needed to load those files and to start, resume, wait on, get the
   report of, or stop a subagent. That report access does not extend to the
   underlying work artifacts: builds, logs, diffs and outputs stay with the
-  subagent, and only the bounded report reaches the manager. Everything else
-  stays banned.
+  subagent, and only the bounded report reaches the manager. Running the
+  scheduler script `python3 scripts/dag.py` is dispatch machinery too, like starting
+  a subagent, so the manager runs it itself. Writing and updating the graph
+  file is dispatch machinery too. Everything else stays banned.
 - The user has final authority on every decision that matters; the manager's duty is
   the conversation that turns a request into a specific, checkable spec.
 - The user answers only questions only the user can answer. Everything else the
@@ -75,6 +77,13 @@ description to the default subagent's prompt and picks the closest model class
 model list it discovered (`scripts/models.py`): map tiers to actual models from
 your own knowledge of the families, preferring the discovered list; an empty list
 means harness defaults apply.
+
+A harness binding can attach a reasoning effort and extra skills to each tier, plus
+a fallback list of models for when the preferred models are down. The manager names
+only the tier; the binding supplies the effort, the skills and the fallback.
+
+A screenshot or image verdict goes to the cheapest model in the binding that can
+read images. When that model reports unsure, the verdict moves one tier up.
 
 | Tier | Takes |
 |------|-------|
@@ -126,11 +135,108 @@ Cut the work into deliverables with disjoint file scopes. A job whose checks run
 builds or generators gets its own `git worktree`, and so does every job if the repo has
 commit hooks. A job that only edits and commits text may share the tree when the repo has no
 commit hooks. It commits only its own paths (`git commit -- <paths>`; retry on index.lock
-up to 5 times, then escalate; never delete the lock). Jobs whose checks use the same shared resource (a database, a fixed port, a device, a shared cache) run one after another, even in separate worktrees. One fresh reviewer for each deliverable, all in
-parallel. Then one more fresh reviewer gets the combined change set of the full task and
+up to 5 times, then escalate; never delete the lock). Jobs whose checks use the same shared resource (a database, a fixed port, a device, a shared cache) run one after another, even in separate worktrees. One fresh reviewer for each deliverable. Then one more fresh reviewer gets the combined change set of the full task and
 checks that the pieces fit: no contradictions between files, one name for each concept, no
 logic duplicated across deliverables, the same behaviour for the same condition everywhere,
 docs and code agree. Its findings become fix deliverables like other findings.
+
+The dependency graph sets the dispatch order. Before the first dispatch, the manager
+writes each deliverable as a node of a graph file in its scratch directory. Each node
+lists its `deps` (the nodes whose output it reads), its `files` (the paths it writes) and
+its `resources` (the shared things its checks use). Then the manager runs
+`python3 scripts/dag.py check GRAPH` (path relative to this skill). Exit 1 means the
+graph is invalid, so the manager fixes the split, not the check. Exit 2 means a usage or
+filesystem error, for example a missing or unreadable graph or a lock file that cannot
+open. A new split cannot repair that. The manager fixes the path, the permissions or the
+call, runs the command again, and reports the error to the user if it persists.
+
+These rules let the graph be as wide as the work lets it:
+
+1. A node is the smallest unit: one concern with its own files. The manager splits a
+   deliverable by file, by component, by test target and by host when the pieces
+   share no file. The manager splits a node that touches more than one concern
+   before dispatch.
+2. Each read-only question is its own discovery node. The manager never bundles
+   independent questions into one discovery child, and it dispatches all of them
+   together.
+3. Checks and reviews are nodes too. A render, a build check on another base and a
+   per-deliverable review each run when their inputs are there, in parallel with
+   unrelated work. Each per-deliverable reviewer depends on its work nodes. The
+   combined reviewer depends on all reviewer nodes.
+4. Consumers start early. When both briefs fix the data shape between a producer and a
+   consumer, the two nodes start at the same time and the consumer tests against a
+   fixture of that shape.
+5. Idle capacity is a defect. While there are free slots and `ready` prints fewer ids
+   than there are slots, the manager splits todo nodes more before it waits. A running
+   node is never repartitioned: its files stay reserved until it is done or failed. To
+   change its scope, the manager steers it, and new work on its files waits for it. The
+   manager stops splitting when every todo node is one concern with its own files and
+   no split into pieces that share no file remains; then it waits.
+6. A child that may spawn its own children obeys the same graph rules for its
+   sub-deliverables.
+
+Example: the deliverable "add an option" splits into `parser` and `cli`, which write
+different files and share a test database. Two independent questions are two
+discovery nodes. `docs` is a second deliverable. Each work node has its reviewer, and
+`review-all` is the combined reviewer.
+
+```json
+{"nodes": {
+  "ask-config":    {"deps": [], "files": [], "resources": []},
+  "ask-callers":   {"deps": [], "files": [], "resources": []},
+  "parser":        {"deps": ["ask-config"], "files": ["src/parser.py"], "resources": ["test-db"]},
+  "cli":           {"deps": ["ask-callers"], "files": ["src/cli.py"], "resources": ["test-db"]},
+  "docs":          {"deps": [], "files": ["docs/usage.md"], "resources": []},
+  "review-parser": {"deps": ["parser"], "files": [], "resources": []},
+  "review-cli":    {"deps": ["cli"], "files": [], "resources": []},
+  "review-docs":   {"deps": ["docs"], "files": [], "resources": []},
+  "review-all":    {"deps": ["review-parser", "review-cli", "review-docs"], "files": [], "resources": []}
+}}
+```
+
+The first `ready` prints `ask-config`, `ask-callers` and `docs`. `parser` and `cli` do not
+run at the same time, because both use `test-db`.
+
+`python3 scripts/dag.py ready GRAPH --max N` prints at most N ids that can run. N is the number of
+free child slots of the harness, less one slot for the inspector where the inspection
+rule of the context budget keeps one free. The manager runs
+`python3 scripts/dag.py start GRAPH ID...` on the ids `ready` returned and dispatches only the ids
+`start` accepted. A refused id is not dispatched. Never dispatch
+before `start`. `start` refuses any id that
+`ready` would not return, and any id it gets twice: it exits 1 and writes nothing.
+`check` rejects an absolute path and a path that starts with `..` after normalization.
+Graph paths are repo-relative and compared after normalization; symlinked aliases are not detected.
+`check` also rejects a running or done node whose dependency is not done.
+Every write holds a lock file next to the graph, so concurrent calls are
+serialized. The manager is the only writer of the graph file. It changes node states
+only with `dag.py` commands. It edits the graph by hand only to add or change nodes,
+and it sends that edit in its own message, never together with a `dag.py` call, so no
+call has read the graph when the edit starts. Any other command
+follows the same exit-1 and exit-2 recovery as `check` above. When a child reports,
+`python3 scripts/dag.py done GRAPH ID` or `python3 scripts/dag.py fail GRAPH ID`, then runs `ready` again, runs
+`start` on the ids it prints, and dispatches the accepted ids without waiting for the
+rest. The manager does not wait for a full wave to finish.
+
+A child that stops without a report holds its files and resources until the manager
+runs `fail`. After the manager stops a child, or sees that a child died or passed its
+deadline, or the harness refused a launch, the manager confirms that the child
+is not running and runs `python3 scripts/dag.py fail GRAPH ID`.
+
+The dependents of a failed node do not become ready. The same node does the work again:
+the manager changes the brief and runs `python3 scripts/dag.py retry GRAPH ID`. `retry` accepts a
+failed or done node, sets it to todo and resets its done or failed transitive
+dependents to todo; it refuses when the node or a dependent is running. When `ready`
+prints the id again, the manager runs `start` and dispatches on accept.
+
+A rejecting review marks the review node failed. The manager runs `retry WORK_ID` on
+the work node it reviewed: the work node goes back to todo and the review node, a
+transitive dependent of it, resets to todo with it. The manager steers or re-briefs the
+author, and the review runs again with a fresh reviewer that has not seen earlier
+rounds. The node keeps its id and its files. When the fix
+must write a file that the node does not own, the manager adds that file to the `files`
+of the node before the retry, and `check` must pass. `python3 scripts/dag.py show GRAPH`
+prints each node with its state and its unmet deps. Where the harness has no copy of the
+script, the manager keeps the same graph and the same rules by hand.
 
 If the harness has a binding skill for tiers and models, load it.
 
@@ -159,6 +265,9 @@ If the harness has a binding skill for tiers and models, load it.
    other child alone.
 
 ## Report contract (subagent to manager)
+
+The first line of each report names the provider and the model the subagent uses,
+read from its own runtime, not from the brief. The manager gives that line to the user.
 
 1. Outcome: done, blocked, or partial (partial names what is left and why).
 2. Evidence: the check that ran, the exact command, its exit status via
