@@ -26,7 +26,10 @@ ambiguity.
    whole spec.
 4. One deliverable, one concern. Two deliverables sharing a file get merged, because no disjoint unit can
    own a shared file.
-5. An open trade-off is a defect in the draft: send it back to brainstorm rather than encoding a coin
+5. A command that names a value the user must look up goes to the user with that value inline, never a
+   placeholder in angle or square brackets. A paste-in-place block that still holds one breaks the run
+   after it edits system state, so the failed run and the rerun act on different inputs.
+6. An open trade-off is a defect in the draft: send it back to brainstorm rather than encoding a coin
    flip.
 
 ## Iteration with the user
@@ -50,6 +53,9 @@ On acceptance, write the spec to:
   kebab-case; the date is today.
 - The file carries the spec as accepted, plus the decision log it derives from when one exists.
 - Offer to commit the file to that logbook repository. No commit without the user's go.
+
+Spec text the deliverer runs follows the same rule. When a deliverable validates work that ends in a
+command block for the user, the spec writes the looked-up value into that block, not a placeholder.
 
 ## Handoff
 

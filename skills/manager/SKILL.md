@@ -63,6 +63,12 @@ A decision that needs exploration — a trade-off no experiment settles, multipl
 
 ## Dispatch tiers
 
+A user-facing defect that only a spec change prevents is its own deliverable. When the user reports that a
+command the team handed over failed in their shell and the fix was not a code fix, stop the line of work
+that produced it before the next dispatch: the spec behind the command missed a check, and the response
+rewrites the spec, it does not rerun the same line more carefully. The layer that writes the user-facing
+string is the layer that stops the failure.
+
 The manager names a tier, never a model. The harness maps tier to model through
 agents named after the tiers; where they are missing, the manager prepends the role
 description to the default subagent's prompt and picks the closest model class
@@ -117,9 +123,9 @@ real dependency where B reads the output of A, or two jobs that share a
 resource (a database, a fixed port, a device, a shared cache). Read-only
 discovery runs in parallel with the work that does not depend on it.
 
-Cut the work into deliverables with disjoint file scopes. A job whose checks run tests,
+Cut the work into deliverables with disjoint file scopes. Work meant to change a PR branch is committed on that PR branch, not on a side branch the user has to ask about later: run a read-only check first (`git worktree list`, `git status --short`, `merge-base --is-ancestor <pr-branch> HEAD-of-work`); when the PR branch is at the PR head, checked out in one place and clean, the job commits on the PR branch itself. When the check fails, the job builds on a scratch branch on the PR head and the work moves onto the PR branch when it lands (fast-forward, then replay the other jobs' commits on top); keep every job's commits self-contained and path-scoped so the move is a fast-forward or a clean replay, and tie each review-application commit to the reviewer comment id it applies. Isolate only for parallel commits: a job whose checks run tests,
 builds or generators gets its own `git worktree`, and so does every job if the repo has
-commit hooks. A job that only edits and commits text may share the tree when the repo has no
+commit hooks or several jobs commit in parallel. A job that only edits and commits text may share the tree when the repo has no
 commit hooks. It commits only its own paths (`git commit -- <paths>`; retry on index.lock
 up to 5 times, then escalate; never delete the lock). Jobs whose checks use the same shared resource (a database, a fixed port, a device, a shared cache) run one after another, even in separate worktrees. One fresh reviewer for each deliverable, all in
 parallel. Then one more fresh reviewer gets the combined change set of the full task and
@@ -129,13 +135,75 @@ docs and code agree. Its findings become fix deliverables like other findings.
 
 If the harness has a binding skill for tiers and models, load it.
 
+## Dispatch briefs that survive delegation
+
+These rules cost report rounds when missing. Put them in every brief that fits.
+
+- **Any step whose result feeds a user-facing acceptance rule** (a release
+  criterion, a speed claim, a security property, a yes/no the brief itself
+  will relay) **gets its mutation check named in the same brief item**, not
+  as a separate item at the end: show the check fails when the change under
+  test is reverted. A check that passes both before and after the change
+  proves nothing.
+
+- **Any step whose result feeds a user-facing acceptance rule** (a release
+  criteria, a speed claim, a security property, a yes/no the brief itself
+  will relay) **gets a mutation check as part of the step**, not as a
+  separate item at the end: show the check fails when the change under test
+  is reverted. A check that passes both before and after the change proves
+  nothing.
+
+- **Anchor discovery to the ground truth of the class.** A discovery brief that
+  names specific branches, PR numbers or issue numbers silently misses any
+  other instance: children will not look past the list. Give the rule that
+  produces the list (remotes + `git branch -a`, `gh pr list --search`, label
+  filters) and, if known instances must be included, name them in a separate
+  sentence as examples to confirm, not as the scope.
+- **When the user widens scope mid-run, steer the running discovery child
+  rather than dispatching a second one** for the same documents; steer text
+  appends to its next tool result. A second child is only for work the running
+  one's brief rules out.
+- **Quotes in a research brief must arrive verbatim** with author, source
+  number and URL. Paraphrased maintainer quotes cannot anchor a cut plan.
+- **Forbid stray artifacts:** the brief for any child that works in a
+  repository or scratch tree must say where its outputs live and that no other
+  path gets written. Test scripts and generators leave directories behind;
+  make cleanup or an empty `git status` a listed check.
+- **A conflict predicted against an old base is not a conflict.** Re-run the
+  merge check against the branch's actual new base (for a stacked branch, its
+  parent tip) before writing resolution instructions into a brief; a stale
+  prediction sends the child hunting for a conflict that the rebase already
+  resolved.
+- **Skipped checks must name their reason.** The report contract outcome line
+  accepts `UNRUN: <reason>` for a check the brief allowed skipping (missing
+  toolchain, range-diff identical). A skip without a reason reads as a pass.
+- **A mutation proves its own assertion, never the assertion's surroundings.**
+  A mutation that makes a named test fail shows the test is strong against that one
+  change; it says nothing yet about the mutations the author did not run. After each
+  mutation, the author lists the other mutations it did not try and says which of them
+  its own checks would still miss. That list is the verifier's roadmap.
+- **A scheduling or concurrency check must also be run against the baseline and shown
+  to trip there.** A 'max V100 <= 2' harness that also passes on the un-throttled
+  original proves nothing. Name the baseline run in the same check.
+- **Serialize, don't de-test.** When a Jenkinsfile restructure queues GPU legs to
+  relieve a scarce card, each serialized leg keeps running its own full test step.
+  Do not convert legs to CPU-only to make them cheaper under the queue; a blind
+  reviewer treats silent test-coverage loss as a defect and fails the change.
+- **When repeated fix rounds each leave a fresh residue of findings in the same
+  coordinating component, the component is the problem, not the patch.** The next
+  fix brief tables the design WITHOUT that component instead of scheduling a fourth
+  mechanism for it. A manager that keeps re-skinning it pays a full fix round plus a
+  full review round per attempt and ends with the same verdict.
+
 ## Context budget (hard rules)
 
 1. A subagent report is at most 30 lines. Longer goes back for compression; it is
    not evidence the manager reads.
 2. Evidence longer than 10 lines goes to a file; the report carries the path plus at
    most 10 decisive lines (the first error on failure).
-3. Diffs, listings and logs travel as path plus counts, never inline.
+3. Diffs, listings and logs travel as path plus counts, never inline. The
+   manager repeats them to the user the same way: sizes of files and patches
+   as counts, never inline content, unless the user asks to see it.
 4. Follow-ups resume the agent that produced the work (same session or task); the
    manager does not re-read artifacts it already dispatched.
 5. Independent dispatches go out in one message and run concurrently. One report to
@@ -153,9 +221,71 @@ If the harness has a binding skill for tiers and models, load it.
    any time when the user cancels it, or when the child's work is unsafe. It leaves every
    other child alone.
 
+   When a rescue or verification child inherits a worktree from an earlier
+   stopped child, its report opens with the `git status --short` of that
+   worktree plus the leftover files it found in the scratch dir. A report
+   that opens 'clean, N commits' without naming what it found at start hides
+   whether partial work was kept, redone or silently discarded.
+
+   When a fix round's branches must survive a later redesign (the previous
+   design is a candidate to go back to), the fix brief names a backup ref
+   (`git branch backup/<name> HEAD` before the first commit of the round) and
+   the report carries its sha; without it the reversal costs an archaeology
+   round.
+
+## Verifying a brief before dispatch
+
+## Review findings and fix briefs
+
+- One fix brief per repo carries the design the whole class migrates to, not just the line the review named. For each finding, confirm the claim on the code first (a read-only triage child), then write the rule the fix must satisfy; the fix covers every place the rule applies in that repo. A fix that patches only the cited line leaves the sibling repos inconsistent and the next review re-finds the pattern there.
+- Fix briefs that follow a review confirm every finding's cited file:line against the current diff before the fix; a review written against an earlier base cites stale lines, and a fix child working from the line number alone edits the wrong region.
+
+## Process and batch notices
+
+- A process notice from a container a child launched is information for that
+  child, not a task for the manager. Do not steer, stop or re-dispatch: the
+  child sees the failure and owns its fix. The only signal worth relaying is
+  the child's own report when the batch completes.
+- Read the last `exit=` line a child appends to a command, not the harness
+  header: the header reports the exit of the trailing echo and can call a
+  failed check "completed normally".
+
+A brief gets a pre-dispatch check against facts the manager already knows; a stale
+brief costs the full round trip of the child discovering the error and escalating.
+
+- **Verify every precondition a child will check before writing the brief's stop
+  rule.** If a known fact contradicts the stop rule (a file type, a symlink, a
+  repo layout, a config key), rewrite or drop the rule before dispatch. A brief
+  the child stops on at step 0 has spent the child's whole budget on nothing.
+- **A brief that names a specific state must anchor to the observed state of this
+  session, not to a remembered state from an earlier session.** Environment
+  drifts; a brief that claims `config.yaml is a symlink` without a current read
+  fails at dispatch time even if it was true before.
+- **Approve escalation-fixes in the brief of the escalation, not in the reply to
+  the user.** An [ESCALATE-TO-MANAGER] that names the exact commands to run lets
+  the fix brief copy them. An escalation without a proposed fix costs the manager
+  a speculative-planning round before re-dispatch.
+- **Verify the remote/branch state a brief names before writing the push command
+  into it.** A brief that names fork remote `X` while the worktree's actual
+  remote for it is `origin` makes the child's first command fail; have the child
+  resolve the remote with `git remote -v` and use the result, or re-check with
+  `git ls-remote <url>` so the command works from any worktree.
+- **When a child is found to have made no changes, route the redo as a fresh
+  leaf, not a resume of the stopped one.** "Resume" of a cancelled run inherits
+  its partial edits and guesses; the redo brief must read the leftover state
+  first (git status/diff) and keep or redo it explicitly, never discard it
+  blindly.
+- **User text edits live in the same tree as the task edit:** out-of-commit paths
+  are the user's own; never commit, edit or revert them. The brief names them and
+  the review excludes them (`--exclude`). If the user later approves committing
+  them, that gets a **separate** commit from the task work, with no Assisted-by
+  trailer, and a secret-scan over the diff before the commit.
+
 ## Report contract (subagent to manager)
 
 1. Outcome: done, blocked, or partial (partial names what is left and why).
+   A check the brief allowed skipping is reported as `UNRUN: <reason>`, never
+   silently dropped.
 2. Evidence: the check that ran, the exact command, its exit status via
    `echo "exit=$?"` on the same line, at most 10 decisive lines verbatim.
 3. Open decisions, each with options and a recommendation.
@@ -167,11 +297,16 @@ One message per batch: deliverables passed with the check that proved each;
 decisions taken alone, one line each; decisions needing the user, batched, each with
 a recommendation. Subagent evidence is relayed, never paraphrased.
 
-## Conditional instructions
-
-This pattern comes from the humanlayer `improve-claude-md` skill. When a manager
-writes instructions that apply only in some cases (spec templates, harness rules,
-per-project notes), wrap each conditional block in `<important if="condition">`
-tags and state the trigger in the condition. Give each rule its own narrow
-condition. Keep content that applies to every task plain and unconditional. This
-helps the model see which guidance applies to the current task and ignore the rest.
+- **The user is not a status line.** Never end a report with a pending question
+  the manager can answer, and never ask 'want me to continue' when the next
+  step is already decided. If one question must end the message, it is about
+  goal or scope, never about the manager's own progress.
+- **The user answers only questions only the user can answer.** A choice between
+  options the manager or an experiment can settle (which of several GPU cards a
+  leg should take, which of two coverage/serialization shapes) is not such a
+  question. Pick a default, state it, let the work proceed, and let the user veto
+  after the fact.
+- **Background-batch messages carry result, not state.** Name the deliverable,
+  the check that proved it, and the decisions left. When the harness delivers
+  batch results on your behalf, skip the separate 'it is running' note after
+  the dispatch.
