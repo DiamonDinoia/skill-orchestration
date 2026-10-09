@@ -146,13 +146,6 @@ These rules cost report rounds when missing. Put them in every brief that fits.
   test is reverted. A check that passes both before and after the change
   proves nothing.
 
-- **Any step whose result feeds a user-facing acceptance rule** (a release
-  criteria, a speed claim, a security property, a yes/no the brief itself
-  will relay) **gets a mutation check as part of the step**, not as a
-  separate item at the end: show the check fails when the change under test
-  is reverted. A check that passes both before and after the change proves
-  nothing.
-
 - **Anchor discovery to the ground truth of the class.** A discovery brief that
   names specific branches, PR numbers or issue numbers silently misses any
   other instance: children will not look past the list. Give the rule that
