@@ -1,65 +1,45 @@
 ---
 name: parallel
-description: Use when the user says "run in parallel": parallel-execute an approved spec whose units touch disjoint files.
+description: Use when the user says "run in parallel" or holds an approved spec with units on disjoint files. Runs one concurrent wave, re-splits leftovers.
 license: MIT
+version: 1.4.0
 ---
 
 # Parallel
 
-Parallel executes an approved spec or plan as one concurrent wave of independent units. Each unit owns a
-disjoint file set, carries one deliverable with a check, and is staffed by tier. Leftovers after
-integration feed the next wave.
-
-## Input
-
-An approved spec or plan — from the spec protocol, from the user, or from a team split. No spec, no wave:
-an underspecified request goes back; it is not split here.
+Run an approved spec as one concurrent wave of units on disjoint file sets. No spec, no wave.
 
 ## Split rule
 
-Split only along disjoint file sets. A file named in two units means the split is wrong: merge those units
-and re-check disjointness. Directory-level scopes are disjoint only when no file can fall in both. A file
-no unit owns is a gap in the split, not freedom to touch.
+If two units name one file, merge them and re-check. Unowned files are gaps, not freedom to touch.
 
 ## Unit definition
 
-Every unit carries:
-
 - Deliverable: one statement, checkable on its own.
-- Check: a command that exits non-zero while the deliverable is unmet.
-- File scope: exactly the disjoint set above; a file not listed is out of scope.
-- Tier: `intern`, `junior`, `senior` or `principal` — the manager skill's tiers. Intern takes mechanical,
-  junior the well-specified, senior (the default) anything with judgment calls, principal the hard-on-sight
-  work. The cheapest tier that can meet the check takes it.
+- Check: a command exiting nonzero while the deliverable is unmet.
+- File scope: exactly the disjoint set.
+- Tier: `intern`, `junior`, `senior` (default) or `principal`, cheapest that meets the check. Mechanical to intern, well-specified to junior, judgment to senior, hard-on-sight to principal.
 
-## Dispatch
+## Dispatch and report
 
-One message, all units dispatched concurrently. Every dispatch prompt states the unit definition verbatim
-plus the report contract below. While the wave runs, prepare integration; read nothing the units write.
+Dispatch all units in one concurrent message. Each prompt carries the unit definition verbatim plus the report contract. During the wave, prepare integration; read no unit output.
 
-## Report contract (per unit, ≤30 lines)
+Report contract (30 lines max):
 
-1. Outcome: done, blocked, or partial — partial names what is left and why.
-2. Evidence: the check that ran, the exact command, its exit status, at most 10 decisive lines verbatim.
-   Longer evidence goes to a file; the report carries the path.
+1. Outcome: done, blocked, or partial; partial names what is left and why.
+2. Evidence: check command, exit status, up to 10 decisive lines verbatim; longer output goes to a file, report its path.
 3. Open decisions, each with options and a recommendation.
-4. Nothing else.
 
-## Integration and next wave
+## Integration
 
-1. Rerun every unit's check on the integrated tree. A unit that passed alone and fails integrated collided
-   with the split rule: find the shared file, merge the units' scopes, redo the split.
-2. A failed or blocked unit re-splits into the next wave under the same rules. A failure that survives a
-   re-split goes to the user with options; never retry silently.
-3. The run ends when every deliverable passes on the integrated tree, or the user stops it.
+1. Rerun every check on the integrated tree. A unit passing alone but failing integrated shared a file; merge the scopes, redo the split.
+2. Re-split failed or blocked units into the next wave. A failure surviving re-split goes to the user with options; never retry silently.
+3. End when every deliverable passes integrated, or the user stops it.
 
 ## Computing waves
 
-A spec with more than one unit gets a `plan.json`: one entry per unit with `name`, `files`, optional
-`depends` on unit names, and `cost` from the tier — intern 1, junior 2, senior 3, principal 4. Then run:
+For multiple units, write `plan.json`, one entry per unit: `name`, `files`, optional `depends`, `cost` (intern 1, junior 2, senior 3, principal 4). Then run:
 
     python3 scripts/waves.py plan.json
 
-relative to this skill. A nonzero exit means the split is wrong — overlap, cycle or bad input — so fix
-the split, not the plan. Dispatch the printed waves concurrently, wave after wave; put senior/principal
-on the `(critical)` units.
+relative to this skill. Nonzero exit means overlap, cycle, or bad input; fix the split, not the plan. Dispatch waves in order, concurrently within each; senior/principal take `(critical)` units.

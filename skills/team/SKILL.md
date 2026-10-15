@@ -1,117 +1,107 @@
 ---
 name: team
-description: Rounds-based multi-agent orchestration for one task: manager splits, critics attack, engineers execute, reviewers validate.
+description: Multi-agent orchestration of one task in rounds: the manager splits, critics attack, engineers execute in worktrees, reviewers validate, and the manager merges and re-splits until deliverables pass.
 disable-model-invocation: true
 argument-hint: "[interview|plan|execute|review]"
+version: 1.4.0
 ---
 
 # Team
 
-Team runs one task as rounds. The manager splits the task into subproblems. Critics attack the split before any work starts. Engineers execute subproblems, each in its own git worktree. Reviewers validate and prune the work. The manager merges with consent. The manager re-splits what remains. The loop ends when every deliverable in the run's state file passes on the integration branch.
+Team runs one task as rounds. The manager splits the task, critics attack the split, engineers execute subproblems in git worktrees, and reviewers validate and prune. The manager merges with user consent, re-splits what remains, and ends the run when every deliverable in the state file passes on the integration branch.
 
 ## Manager role
 
-The invoking agent assumes the manager role for the run. Where `../manager/SKILL.md` is present, its Role, Dispatch tiers, Free-tier children, Context budget and Report contract rules bind this run too. Where that file is absent (standalone install), the Roles and harness mapping below stands alone. Inside a child, the parent takes the user's role as a communication proxy: it answers only from existing user instructions and escalates user-only decisions and consent requests to the user.
+The invoking agent is the manager. When `../manager/SKILL.md` exists, its Role, Dispatch tiers, Free-tier children, Context budget, and Report contract rules also bind this run. Without that file, the Roles and harness mapping below stands alone. Inside a child run, the parent answers only from existing user instructions and escalates user-only decisions and consent requests.
 
 ## Triage
 
-Run team only when the task has two or more independent subproblems and delegation saves context, latency, or verification cost. Skip for Q&A, single commands, and single-file edits.
+Run team only when the task has two or more independent subproblems and delegation saves context, latency, or verification cost. Skip Q&A, single commands, and single-file edits.
 
 ## Modes
 
-The first invocation argument selects the mode.
+| Argument | Run when |
+|----------|----------|
+| `interview` | no state file, no Deliverables section, or the user asks |
+| `plan` | deliverables exist, no current split |
+| `execute` | a split has open subproblems |
+| `review` | all deliverables pass, or the user asks |
 
-| Argument | Mode | Run when |
-|----------|------|----------|
-| `interview` | Interview | no state file, or the user asks |
-| `plan` | Plan | deliverables exist, no current split |
-| `execute` | Execute | a split has open subproblems |
-| `review` | Review | all deliverables pass, or the user asks |
-
-With no argument, read the state file and decide in this order: no state file, or no Deliverables section in it, runs Interview. An open subproblem in the split runs Execute. Every deliverable passing runs Review. Anything else runs Plan.
-
-Invocations: `/team interview`, `/team plan`, `/team execute`, `/team review`, `/team`.
+With no argument, pick the first matching row.
 
 ## Interview
 
-Produce deliverables a reviewer can check without contacting the user. Invocation: `/team interview`.
+Produce deliverables a reviewer can check without contacting the user.
 
 1. Ask the user the smallest set of questions that makes every deliverable measurable.
-2. Write the deliverables and the build-and-test command into the state file. The State-file section defines the check format.
-3. Run every check once. A check that errors for environmental reasons gets fixed, or the deliverable gets rewritten.
-4. If the state file has no Dispatch preferences, decide concurrency (parallel or one-at-a-time) and engineer dispatch (dispatched or manager-inline) and record both in the state file. Both are reversible, so the manager decides them instead of asking the user.
-5. Summarize the deliverables to the user. Interview ends after the summary.
+2. Write the deliverables and the build-and-test command to the state file.
+3. Run every check once. Fix environmental failures, or rewrite the deliverable.
+4. If the state file lacks Dispatch preferences, decide concurrency and engineer dispatch, and record both. Both are reversible, so decide without asking the user.
+5. Summarize the deliverables to the user. Interview ends there.
 
-Open trade-offs that surface through interview questions — multiple live interpretations, or a trade-off no experiment settles — run the brainstorm protocol of the `brainstorm` skill first: recon by dispatch, enumerate the interpretations, one batched question round carrying a recommended answer each. The decision log feeds the deliverables.
+The interview can surface an open trade-off, such as a choice no experiment settles. When it does, run the `brainstorm` protocol first: recon by dispatch, enumerate interpretations, one batched question round, one recommended answer each. The decision log feeds the deliverables.
 
 ## Plan
 
-Invocation: `/team plan`.
-
-1. Draft the split. Every subproblem carries: owner role, file scope, check, dependency list. An empty dependency list means the subproblem runs in the current round.
-2. Draft the pool. One role per needed specialty. A role is a persona plus a scope.
-3. Dispatch one critic per pool role. The prompt names the role as the critic's lens. Every critic answers: what is missing, what is redundant, what overlaps, what is mis-sized, what dependency is unstated.
+1. Draft the split. Every subproblem carries owner role, file scope, check, and dependency list. An empty dependency list means the subproblem runs this round.
+2. Draft the pool with one role per needed specialty. A role is a persona plus a scope.
+3. Dispatch one critic per pool role with the Critic prompt below.
 4. Fold the critique. Revise the split. Record accepted and rejected findings in the state file.
-5. Repeat the critique at most once more, and only when the first round found structural problems: a missing subproblem, overlapping scopes, or a cyclic dependency.
+5. Repeat the critique at most once, and only when round one found structural problems: a missing subproblem, overlapping scopes, or a cyclic dependency.
 
-Plan writes the state file only. Plan writes no code. Plan ends when the split is recorded and no blocking finding remains.
+Plan writes the state file only, never code, and ends when the split is recorded and no blocking finding remains.
 
 ## Execute
 
-Run one round at a time. Invocation: `/team execute`.
+Run one round at a time.
 
-1. Record the starting branch in Notes. Read the state file's Integration branch and Integration checkout fields. If they are empty, the run is top-level: record the branch as `team/integration` and the checkout as the path of the user's checkout. Check out the integration branch in the recorded integration checkout, whether the branch exists or is new: `git -C "<integration checkout>" checkout <integration branch>`, or `git -C "<integration checkout>" checkout -b <integration branch>` when it does not exist. The merge of step 10 never ends up on another branch, such as `main`. A team run inside another team run is not supported yet, so an engineer in a team run does not start its own team run.
+1. Record the starting branch in Notes. If the Integration Branch and Checkout fields are empty, the run is top-level. Set Branch to `team/integration` and Checkout to the user's checkout path. Run `git -C "<integration checkout>" checkout <integration branch>`, adding `-b` when the branch is new. The step-10 merge never lands on another branch. Nested team runs are not supported, so an engineer never starts one.
 2. Select subproblems whose dependencies are done.
-3. Create one worktree per engineer, pinned to the current integration commit:
+3. Create one worktree per engineer, pinned to the current integration commit. `<repo>` names the repository directory.
 
 ```bash
 BASE=$(git rev-parse <integration branch>)
 git worktree add ../<repo>-team-<round>-<role> -b team/<round>-<role> "$BASE"
 ```
 
-`<repo>` names the repository directory. One engineer writes in one worktree. No two engineers share a worktree, so no write conflicts occur.
-
-4. Dispatch engineers per the Dispatch preferences: `parallel` fans out, `one-at-a-time` serializes, `dispatched` uses subagents, `inline` makes the manager the engineer. Every engineer gets: the subproblem, the worktree path, the scope, the check, the base commit, and the sentence "You are the only writer in this worktree."
-5. If an engineer emits `[ESCALATE-TO-MANAGER]`, that engineer ends. Let the others finish. The manager resolves the escalation and re-dispatches the subproblem (step 9) or returns it to the pool.
-6. The round ends when every dispatched engineer reports back. While it runs, advance other round work: prepare reviewer prompts, update the Split table. An engineer that ends without a report is a dropout. Record the dropout in Rounds and return the subproblem to the pool.
-7. Dispatch one reviewer per worktree that produced a report, with the Reviewer prompt template. A reviewer never reviews work it wrote. Worktrees without a report get no review; re-dispatch or end-of-run cleanup removes them.
-8. Apply verdicts. ACCEPT passes. PRUNE: the manager removes the listed edits in the worktree and re-runs the check before the merge. REJECT: record the failure and return the subproblem to the pool.
-9. A re-dispatched subproblem first removes the stale worktree and branch: `git worktree remove --force <previous worktree path>`, then `git branch -D <previous branch name>`. Then it gets a fresh worktree per step 3 and a new branch `team/<round>-<role>-<attempt>`; `<attempt>` counts the dispatches of that subproblem in the current round and starts at 2.
-10. Rebase the engineer's branch onto the run's integration branch, then fast-forward the integration branch onto it, after user consent for the round. Rebase inside the engineer's worktree, where the branch is checked out. Merge inside the recorded integration checkout, which has the integration branch checked out. Before the merge, check the integration checkout is on the integration branch with `git -C "<integration checkout>" rev-parse --abbrev-ref HEAD`; if it is not, stop. Then:
+4. Dispatch engineers per the Dispatch preferences: `parallel` fans out, `one-at-a-time` serializes, `dispatched` uses subagents, `inline` makes the manager the engineer. Give each engineer the Engineer prompt below.
+5. An engineer that emits `[ESCALATE-TO-MANAGER]` ends. Let the others finish. Resolve the escalation, then re-dispatch the subproblem (step 9) or return it to the pool.
+6. The round ends when every engineer reports back. Record an engineer that ends without a report as a dropout in Rounds, and return the subproblem to the pool.
+7. Dispatch one reviewer per worktree that reported, with the Reviewer prompt below. A worktree without a report gets no review, and re-dispatch or end-of-run cleanup removes it.
+8. Apply verdicts. ACCEPT passes. On PRUNE, remove the listed edits in the worktree and re-run the check before the merge. On REJECT, record the failure and return the subproblem to the pool.
+9. A re-dispatched subproblem removes its stale worktree and branch with `git worktree remove --force <previous worktree path>` and `git branch -D <previous branch name>`. Then it starts fresh per step 3 on branch `team/<round>-<role>-<attempt>`. `<attempt>` counts the dispatches of this subproblem this round and starts at 2.
+10. After user consent for the round, run `git -C "<integration checkout>" rev-parse --abbrev-ref HEAD`. Stop unless it prints the integration branch. Rebase the engineer branch onto the integration branch inside the engineer worktree. Then:
 
 ```bash
 git -C "<engineer worktree>" rebase <integration branch>
 git -C "<integration checkout>" merge --ff-only <branch>
 ```
 
-`<branch>` is the accepted branch: `team/<round>-<role>`, or `team/<round>-<role>-<attempt>` after a retry. The manager resolves conflicts during the rebase inside the conflicted hunks only.
+`<branch>` is the accepted branch, `team/<round>-<role>` or its `-<attempt>` variant after a retry. The manager resolves rebase conflicts inside the conflicted hunks only.
 11. Update the state file: subproblem statuses, round verdicts, decisions.
 12. If deliverables remain open, re-split from the remaining state (Plan, including its critique pass) and start the next round.
-13. Dispatch a fresh reviewer with the deliverables, the Verification command, and the run's integration checkout path. The reviewer runs every deliverable check plus the build-and-test command. All green marks every deliverable done in the state file and ends `/team execute`. Any failure reopens that deliverable and returns the run to step 12. A deliverable fails at most twice here; the third failure escalates to the user.
+13. Dispatch a fresh reviewer with the Final reviewer prompt below. On ALL GREEN, mark every deliverable done and end `/team execute`. A failure reopens that deliverable and returns the run to step 12. The third failure of one deliverable escalates to the user.
 
 ## Review
 
-Review audits. Review never edits. Invocation: `/team review`.
+Review audits. Review never edits.
 
-1. Dispatch fresh-context reviewers that did not write the work.
-2. Run every deliverable check from the state file. Never trust a checked box.
-3. List dead worktrees with `git worktree list` and unmerged branches with `git branch --no-merged <integration branch>`.
-4. Compare the state file against the repo. Every Split row's Status must match its branch state.
-5. Report ranked findings, then end with `REVIEW CLEAN` or the findings list. `/team review` ends there.
+1. Have fresh-context reviewers who did not write the work run every deliverable check from the state file.
+2. List dead worktrees with `git worktree list` and unmerged branches with `git branch --no-merged <integration branch>`.
+3. Compare the state file against the repo. The Status of every Split row must match its branch state.
+4. Report ranked findings, then end with `REVIEW CLEAN` or the findings list.
 
 ## State file `.claude/team.md`
 
-Keep the file self-contained. A fresh session continues from the file alone. The state file is an untracked file at `.claude/team.md` in the user's checkout. It never enters a branch. Only the manager edits it.
+Keep the file self-contained so a fresh session continues from the file alone. The state file lives untracked at `.claude/team.md` in the user's checkout and never enters a branch. Only the manager edits it.
 
-Every deliverable check is a shell command that exits non-zero on failure. This contract is the single definition; no other section repeats it.
+Every deliverable check is a shell command that exits non-zero on failure. This contract is the single definition. No other section repeats it.
 
-The manager updates these fields mechanically: Split Status cells, deliverable checkboxes, Rounds appends. Everything else takes judgment.
-
-Rounds are numbered. Round 0 records the critique of the split. Execution rounds start at 1.
+The manager updates Split Status cells, deliverable checkboxes, and Rounds appends mechanically. Everything else takes judgment. Round 0 records the critique of the split. Execution rounds start at 1.
 
 ```markdown
 ### Goal
-One paragraph: what, why, the expected end state.
+What, why, the expected end state.
 
 ### Deliverables
 - [ ] D1: <statement>; check: <shell command, non-zero exit on failure>
@@ -152,40 +142,39 @@ Decisions, escalation resolutions, review findings.
 | Critic | `sonnet-engineer` | `explore` |
 | Reviewer | fresh `sonnet-engineer` | `team-reviewer` or `explore` |
 
-If the mapped subagent type is not dispatchable in the session, the manager does that work inline and records the fallback in Notes. The manager never plays critic or reviewer on its own work; if no subagent can run those roles, the manager asks the user.
+If a mapped subagent type is not dispatchable, the manager does the work inline and records the fallback in Notes. The manager never plays critic or reviewer on its own work. If no subagent can run those roles, it asks the user.
 
-Sanctioned dual-harness conventions outside this section: the slash invocations (`/team ...`), the `.claude/team.md` path, the frontmatter `description`, and the Claude-side frontmatter key `disable-model-invocation`.
+Cross-harness conventions outside this section: the slash invocations (`/team ...`), the `.claude/team.md` path, the frontmatter `description`, and the Claude-side key `disable-model-invocation`.
 
 ## Rules
 
 - The standing rules in `~/.claude/CLAUDE.md` bind every engineer.
-- Critics never edit. Reviewers never edit. Engineers edit only their own worktree. The manager edits the state file, PRUNE removals, conflict resolutions, and, when running as an inline engineer, that engineer's worktree.
-- A reviewer never validates its own output. Every review uses fresh context.
-- Merges and `team/*` deletions need user consent. The manager asks at the start of each execute run, and the answer covers every merge and `team/*` deletion of the run, including end-of-run cleanup.
+- Critics and reviewers never edit. Engineers edit only their own worktree. The manager edits the state file, PRUNE removals, conflict resolutions, and, as an inline engineer, that engineer's worktree.
+- A reviewer never reviews its own work. Every review uses fresh context.
+- Merges and `team/*` deletions need user consent. The manager asks once per execute run, and the answer covers the whole run, including end-of-run cleanup.
 - Any agent may emit `[ESCALATE-TO-MANAGER] <problem> <options> <recommendation>`. The manager resolves and records the decision in Notes.
-- After dispatching agents, the manager advances other round work rather than blocking on results, and does not re-read the agents' files while they run.
-- A failure is a REJECT verdict or a dropout; an escalation is not a failure. The third failure of one subproblem escalates to the user.
-- Execute records the starting branch in Notes and checks it out again after step 13, before end-of-run cleanup.
-- At the end of a run: remove worktrees with `git worktree remove --force`, delete merged and failed `team/*` branches, ask before deleting anything the run did not create, and keep the state file.
+- While agents run, the manager advances other round work and never re-reads the agents' files.
+- A failure is a REJECT verdict or a dropout. An escalation is not a failure. The third failure of one subproblem escalates to the user.
+- After step 13, check out the starting branch before cleanup. At cleanup, remove worktrees with `git worktree remove --force` and delete merged and failed `team/*` branches. Ask before deleting anything the run did not create. Keep the state file.
 
 ## Prompt templates
 
 **Critic:**
 ```
-Attack this split as the <role> critic. Answer five questions: what is missing, what is redundant, what overlaps, what is mis-sized, what dependency is unstated.
+Attack this split as the <role> critic. Answer: what is missing, what is redundant, what overlaps, what is mis-sized, what dependency is unstated.
 
 Goal: <goal>
 Deliverables: <deliverables>
 Split: <split table>
 Pool: <pool table>
 
-Return findings as a list. Every finding names the subproblem numbers it touches. If you find nothing, say SPLIT CLEAN.
-If you cannot judge a point, return [ESCALATE-TO-MANAGER] <problem> <options> <recommendation>.
+List findings with the subproblem numbers each touches. If you find nothing, say SPLIT CLEAN.
+Cannot judge a point: [ESCALATE-TO-MANAGER] <problem> <options> <recommendation>.
 ```
 
 **Engineer:**
 ```
-Execute this bounded subproblem.
+Execute this bounded subproblem. You are the only writer in this worktree.
 
 Subproblem: <subproblem>
 Worktree path: <path>
@@ -193,8 +182,8 @@ Scope: <files you own>
 Check: <check>
 Base commit: <sha>
 
-Work only inside the worktree at <path>. Meet the check, run it, and report changed paths plus the check result. Stay inside scope.
-If blocked, return [ESCALATE-TO-MANAGER] <problem> <options> <recommendation>.
+Work only inside this worktree and stay in scope. Run the check and report changed paths plus its result.
+Blocked: [ESCALATE-TO-MANAGER] <problem> <options> <recommendation>.
 ```
 
 **Reviewer:**
@@ -206,7 +195,7 @@ Diff: <pasted diff, or run `git -C <path> diff <base>..HEAD` when you have shell
 Check: <check>
 
 Run the check yourself. Read the diff. List out-of-scope edits with file:line. End with one verdict: ACCEPT, PRUNE <file:line list>, or REJECT <reason>.
-If you cannot reach a verdict, return [ESCALATE-TO-MANAGER] <problem> <options> <recommendation>.
+No verdict possible: [ESCALATE-TO-MANAGER] <problem> <options> <recommendation>.
 ```
 
 **Final reviewer:**

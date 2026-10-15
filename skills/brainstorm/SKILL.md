@@ -1,69 +1,59 @@
 ---
 name: brainstorm
-description: Use when the user says "brainstorm" or "help me decide": settle open design decisions into a decision log first.
+description: Use when the user says "brainstorm", "help me decide" or "think this through", or brings a vague design intent. Conversation-only; output is a decision log.
 license: MIT
+version: 1.4.0
 ---
 
 # Brainstorm
 
-Brainstorm settles open decisions before any spec exists. The brainstormer explores interpretations by
-dispatch, asks the user one batched round of questions, and records what was chosen and what was rejected
-with reasons. It never edits code; the decisions fold into a spec afterwards.
+Settle open design decisions before any spec exists. Explore interpretations by dispatch, ask one batched question round, record what the user chose and rejected. Never edit code.
 
 ## When to use
 
-- The request names an intent, not a shape: "add search", "make it pluggable", "speed it up somehow".
-- Several materially different designs all fit the request and no running experiment picks one.
-- The user carries a trade-off they cannot yet decide (API shape, storage, protocol, dependencies).
+- The request names an intent, not a shape, such as "add search".
+- Several materially different designs fit and no running experiment picks one.
+- The user cannot yet decide a trade-off, such as API shape or storage.
 
-Not for: a request with one reading (go straight to spec), or a question the codebase can answer (that is
-recon; dispatch it and take the answer).
+A request with one reading goes straight to spec. A question the codebase can answer is recon.
 
 ## The loop
 
-1. Recon by dispatch. Every fact the codebase can answer goes to subagents; the brainstormer's own context
-   never reads the tree directly. Independent recon dispatches go out in one message.
-2. Enumerate the interpretations. From the recon, list every reading of the request that leads to
-   materially different work. Each reading gets one line: what it means, what it costs, what it closes.
-3. One batched question round. Distil the readings into the smallest set of questions only the user can
-   answer and ask them all in a single message. Question rules below.
-4. Fold the answers. Each answer selects an interpretation; the unchosen readings are recorded as rejected
-   with the reason (the user's words where given, inferred cost or risk otherwise).
-5. Record the decision log. Loop back to step 2 only for decisions the answers newly opened; otherwise
-   exit.
+1. Recon by dispatch. Send independent dispatches in one message.
+2. Enumerate the interpretations. Give each reading one line: what it means, costs, closes.
+3. Ask one batched question round. Obey the question rules.
+4. Fold the answers. Each answer selects a reading. Record the rejected ones with the reason.
+5. Record the decision log. Loop to step 2 only for decisions the answers newly opened.
 
-## Recon and context budget
+## Recon budget
 
-- Recon runs on subagents only. A recon report is at most 30 lines; longer goes back for compression.
-- A child that cannot dispatch recon subagents requests recon from its parent instead.
-- Evidence longer than 10 lines goes to a file; the report carries the path plus the decisive lines.
-- The brainstormer never loads raw logs, listings or diffs into its own context.
+- Recon runs on subagents only. Cap each report at 30 lines.
+- A child that cannot dispatch subagents asks its parent for recon.
+- Evidence over 10 lines goes to a file. Report the path and the decisive lines.
+- The brainstormer never reads raw logs, listings or diffs itself.
 
 ## Question rules
 
-- Ask only what only the user can answer: priorities, taste, external constraints. Anything readable or
-  measurable in the codebase is recon, never a question.
-- Inside a child, the parent takes the user's role as a communication proxy: it answers only from existing user instructions and escalates user-only decisions and consent requests to the user.
+- Ask only what the user alone can answer. Priorities, taste, constraints.
+- Anything readable or measurable in the codebase is recon, not a question.
+- A parent proxies the user for its child from existing instructions and escalates user-only decisions.
 - Every question carries a recommended answer.
-- All questions go in one message. A second round exists only when an answer opened a genuinely new
-  interpretation; it is not a licence for trickle questions.
+- Ask a second round only if an answer opened a new interpretation.
 
-## Scope rule
+## Scope
 
-Brainstorm produces decisions, never artifacts: no implementation, no code edits, no spec writing. An urge
-to prototype is a signal the decision is already settled — record it and exit.
+Produce decisions, not artifacts. No code edits, no spec writing. An urge to prototype means the decision is settled. Record it and exit.
 
 ## Decision log
 
-The deliverable is a markdown table, one row per settled decision:
+The deliverable is a markdown table with one row for each settled decision:
 
 | decision | chosen | rejected alternatives | why |
 |----------|--------|-----------------------|-----|
 | <decision> | <chosen option> | <rejected options> | <reason in one line> |
 
-A row with an empty "why" is not settled; send it back through the loop.
+An empty "why" is not settled. Send the row back through the loop.
 
 ## Exit
 
-Exit when the interpretations are exhausted — every live reading is either chosen or rejected — or the
-user says go. Hand off to the spec protocol in `../spec/SKILL.md`, carrying the decision log as its input.
+Exit when every reading is chosen or rejected, or the user says go. Hand off to the spec protocol in `../spec/SKILL.md` with the decision log.

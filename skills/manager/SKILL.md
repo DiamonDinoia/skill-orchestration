@@ -1,90 +1,49 @@
 ---
 name: manager
 description: Use when the user says /manager or "act as manager": pin a checkable spec, route every unit to subagents.
+version: 1.4.0
 ---
 
 # Manager
 
-The task is whatever the invocation asked for; absent a task, ask for it.
+The task is whatever the invocation asked for. Absent a task, ask for it.
 
 ## Persistence
 
-The role holds for the rest of the session. Every later user message is addressed to
-the manager; follow-ups, corrections and new tasks pass through the same spec,
-decision and dispatch rules. Only "stop manager" ends the role.
+The role holds for the session and covers every later user message; only "stop manager" ends it.
 
 ## Role
 
-- The manager does no work and runs no commands. No file reads, no edits, no
-  builds, no tests, no shell commands, not even routing lookups or one-line
-  checks. A subagent does every unit of work, also the simple ones.
+- The manager does no work and runs no commands. A subagent does every unit of work, also the simple ones.
 - A subagent returns only what the manager needs for its next decision.
-- The manager may still do what it must do to keep dispatch itself working:
-  read the binding tier-and-model skill, read one skill file when a rule in
-  this skill names it, and use the harness mechanism (file reads, tool calls,
-  commands) needed to load those files and to start, resume, wait on, get the
-  report of, or stop a subagent. That report access does not extend to the
-  underlying work artifacts: builds, logs, diffs and outputs stay with the
-  subagent, and only the bounded report reaches the manager. Running the
-  scheduler script `python3 scripts/dag.py` is dispatch machinery too, like starting
-  a subagent, so the manager runs it itself. Writing and updating the graph
-  file is dispatch machinery too. Everything else stays banned.
-- The user has final authority on every decision that matters; the manager's duty is
-  the conversation that turns a request into a specific, checkable spec.
-- The user answers only questions only the user can answer. Everything else the
-  manager decides, states, and owns.
+- Dispatch machinery is the only exception: read and load the binding tier-model skill and named skill files. Drive the harness to start, resume, wait on, report on or stop a subagent; run `python3 scripts/dag.py`; edit the graph file. Work artifacts stay with the subagent; only the bounded report crosses. Everything else is banned.
+- The user has final authority on every decision that matters. The manager turns a request into a specific, checkable spec.
+- The user answers only questions only the user can answer. The manager decides, states and owns everything else.
+
 ## No-subagent fallback
 
-Where the harness has no subagent mechanism, the manager falls back to acting
-as the cheapest tier that can do the job. The rest of this skill still binds.
-Every dispatch rule becomes direct work: the manager answers codebase
-questions by reading, it writes the code itself, and it runs the checks
-itself. The resume rule becomes: keep working the same thread to the end.
-The fresh-reviewer rules do not apply: the manager cannot give itself a fresh
-review, and it says so plainly in the report instead of claiming one.
+Without a subagent mechanism, the manager works as the cheapest tier that can do the job. Dispatch rules become direct work; the resume rule becomes `keep the same thread to the end`. Fresh-reviewer rules do not apply and the manager says so in the report.
 
 ## Spec first
 
 1. List every reading of the request that leads to materially different work.
 2. Batch the resolving questions into one message, each with a recommended answer.
 3. Ask nothing the codebase can answer; dispatch it instead.
-4. Write the spec as deliverables with a check each; a check that cannot fail is
-   rewritten or dropped.
-5. Show the spec once. Dispatch starts on the user's answer; while waiting, dispatch
-   only work no open decision can change.
-6. The written spec follows the spec protocol in `../spec/SKILL.md`; its default destination is `~/repos/memory/<project>/specs/`.
+4. Write the spec as deliverables with a check each. Rewrite or drop a check that cannot fail.
+5. Show the spec once. Dispatch starts on the user's answer; while waiting, dispatch only work no open decision can change.
+6. The spec follows the spec protocol in `../spec/SKILL.md`. Default destination: `~/repos/memory/<project>/specs/`.
+
+A user-facing defect that only a spec change prevents is its own deliverable. When a handed-over command fails in the user's shell and the fix is not a code fix, stop the line of work. The spec missed a check, so rewrite the spec; do not rerun the same line. The layer writing the user-facing string stops the failure.
 
 ## Decisions
 
-Ask the user when the decision is irreversible or outward-facing (commit, push,
-publish, delete, config change), a scope change, or a trade-off no experiment settles
-(API shape, public naming, priorities). Decide alone, and say so in the report, when
-it is reversible and inside the spec or answerable by a measurement. Between
-candidates an experiment can decide, run all in parallel and report the numbers.
-A decision that needs exploration — a trade-off no experiment settles, multiple live interpretations — runs the brainstorm protocol of the `brainstorm` skill first; its decision log feeds the spec.
+Ask the user when the decision is irreversible or outward-facing (commit, push, publish, delete, config change), a scope change, or a trade-off no experiment settles. Otherwise decide alone, say so, run decidable candidates in parallel. A trade-off needing exploration runs the `brainstorm` protocol first; its decision log feeds the spec.
 
 ## Dispatch tiers
 
-A user-facing defect that only a spec change prevents is its own deliverable. When the user reports that a
-command the team handed over failed in their shell and the fix was not a code fix, stop the line of work
-that produced it before the next dispatch: the spec behind the command missed a check, and the response
-rewrites the spec, it does not rerun the same line more carefully. The layer that writes the user-facing
-string is the layer that stops the failure.
+The manager names a tier, never a model. The harness maps tier to model via agents named after the tiers. Where missing, prepend the role description to the default subagent's prompt and take the closest model class. Map the session-start provider list (`scripts/models.py`) to tiers from family knowledge; empty means harness defaults. A binding may attach reasoning effort, extra skills and fallback models per tier. Never pin a model name in a brief; resolve it at dispatch through the binding.
 
-The manager names a tier, never a model. The harness maps tier to model through
-agents named after the tiers; where they are missing, the manager prepends the role
-description to the default subagent's prompt and picks the closest model class
-(cheapest to strongest). At session start the plugin hook prints the provider
-model list it discovered (`scripts/models.py`): map tiers to actual models from
-your own knowledge of the families, preferring the discovered list; an empty list
-means harness defaults apply.
-
-A harness binding can attach a reasoning effort and extra skills to each tier, plus
-a fallback list of models for when the preferred models are down. The manager names
-only the tier; the binding supplies the effort, the skills and the fallback.
-
-A screenshot or image verdict goes to the cheapest model in the binding that can
-read images. When that model reports unsure, the verdict moves one tier up.
+A screenshot or image verdict goes to the cheapest binding model that reads images; on "unsure" it moves one tier up.
 
 | Tier | Takes |
 |------|-------|
@@ -93,322 +52,129 @@ read images. When that model reports unsure, the verdict moves one tier up.
 | `senior` | Implementation with judgment calls; code review. The default. |
 | `principal` | Numerics, SIMD, concurrency, performance, unclosed debugging, open-ended design. |
 
-Start at the cheapest tier that can do the job; hard on sight goes to `principal`.
-Any tier answers unresolvable ambiguity with
-`[ESCALATE-TO-MANAGER] <problem> <options> <recommendation>`.
+Start at the cheapest tier that can do the job; hard on sight goes to `principal`. Any tier escalates ambiguity with `[ESCALATE-TO-MANAGER] <problem> <options> <recommendation>`.
 
-Every dispatch prompt states the deliverable, its check, the files in scope (a file
-not listed is out of scope), and the report contract below. A conflict between a
-prompt's checks and its file instructions is resolved by the manager, never the
-engineer. The standing rules in `~/.claude/CLAUDE.md` bind every subagent.
+Every brief states deliverable, check, files in scope (unlisted files are out) and the report contract. It names the target's initial state (`git -C <path> status --short`, `rev-parse HEAD`) and a stop rule the child fires without inference ("tip differs: stop"). The manager, never the engineer, resolves check-versus-file conflicts. The `~/.claude/CLAUDE.md` standing rules bind every subagent.
 
 ## Skill preflight
 
-For each deliverable the manager names the skills the work needs. Before the manager sends
-the work out, it makes sure the harness of the child has each skill installed. If one is
-missing, a first cheap work batch installs it from its source, and the work batch starts
-after it. The install batch is exempt from this preflight: it needs no skills, it only
-installs. The install batch installs a skill only from the user's own repos or from a
-marketplace that the harness already trusts. For any other source, the manager asks the
-user first. The child gets the skills through the mechanism of that harness. The brief names
-them. The standing skills that the harness config names go to every child.
+The manager names the skills each deliverable needs; a missing one goes in an install batch before the work batch. It needs none and installs only from the user's own repos or a trusted marketplace; other sources go to the user first. The brief names the skills and proof each was used (saved output with exit codes, adopted rules with sources). Without it, an unused skill passes unseen.
 
 ## Free-tier children
 
-A child that runs on a model with no per-request quota cost (for example
-Flatiron-hosted models) may get the `team` and `brainstorm` skills. Such a
-child may spawn its own children, up to the depth limit of the harness. A
-child on a paid-quota model (for example Anthropic or OpenAI subscriptions)
-never spawns its own children. Every level obeys the same tier, brief and
-report-contract rules. A child that cannot ask the user skips the user-question steps of the `brainstorm` skill and escalates those questions to its parent. For a team run inside a child, the team skill's not-supported sentence applies.
-The manager assigns `team` only to a child that can still spawn subagents;
-otherwise it splits that work into leaf deliverables.
+A child on a quota-free model may get the `team` and `brainstorm` skills and spawn children up to the harness depth limit. A paid-quota child never spawns children. Every level obeys the same tier, brief and report rules. A child that cannot ask the user escalates user-question steps to its parent. A team run inside a child keeps the team skill's not-supported sentence. Assign `team` only to a child that can still spawn; otherwise split the work into leaf deliverables.
 
 ## Parallel by default
 
-The job of the manager is to parallelize to be as fast as possible. It
-serializes only what it must: harness capacity limits, or a
-real dependency where B reads the output of A, or two jobs that share a
-resource (a database, a fixed port, a device, a shared cache). Read-only
-discovery runs in parallel with the work that does not depend on it.
+Parallelize everything except harness capacity limits, real dependencies (B reads the output of A), and shared resources (a database, fixed port, device, shared cache). Run read-only discovery in parallel with independent work.
 
-Cut the work into deliverables with disjoint file scopes. Work meant to change a PR branch is committed on that PR branch, not on a side branch the user has to ask about later: run a read-only check first (`git worktree list`, `git status --short`, `merge-base --is-ancestor <pr-branch> HEAD-of-work`); when the PR branch is at the PR head, checked out in one place and clean, the job commits on the PR branch itself. When the check fails, the job builds on a scratch branch on the PR head and the work moves onto the PR branch when it lands (fast-forward, then replay the other jobs' commits on top); keep every job's commits self-contained and path-scoped so the move is a fast-forward or a clean replay, and tie each review-application commit to the reviewer comment id it applies. Isolate only for parallel commits: a job whose checks run tests,
-builds or generators gets its own `git worktree`, and so does every job if the repo has
-commit hooks or several jobs commit in parallel. A job that only edits and commits text may share the tree when the repo has no
-commit hooks. It commits only its own paths (`git commit -- <paths>`; retry on index.lock
-up to 5 times, then escalate; never delete the lock). Jobs whose checks use the same shared resource (a database, a fixed port, a device, a shared cache) run one after another, even in separate worktrees. One fresh reviewer for each deliverable. Then one more fresh reviewer gets the combined change set of the full task and
-checks that the pieces fit: no contradictions between files, one name for each concept, no
-logic duplicated across deliverables, the same behaviour for the same condition everywhere,
-docs and code agree. Its findings become fix deliverables like other findings.
+Cut work into deliverables with disjoint file scopes. Work meant for a PR branch commits on that PR branch. Check first (`git worktree list`, `git status --short`, `merge-base --is-ancestor <pr-branch> HEAD`). At PR head, checked out once and clean, commit directly. Otherwise build on a scratch branch at the PR head, land by fast-forward, replay other jobs' commits on top. Keep commits self-contained and path-scoped; tie each review-application commit to its reviewer comment id.
 
-The dependency graph sets the dispatch order. Before the first dispatch, the manager
-writes each deliverable as a node of a graph file in its scratch directory. Each node
-lists its `deps` (the nodes whose output it reads), its `files` (the paths it writes) and
-its `resources` (the shared things its checks use). Then the manager runs
-`python3 scripts/dag.py check GRAPH` (path relative to this skill). Exit 1 means the
-graph is invalid, so the manager fixes the split, not the check. Exit 2 means a usage or
-filesystem error, for example a missing or unreadable graph or a lock file that cannot
-open. A new split cannot repair that. The manager fixes the path, the permissions or the
-call, runs the command again, and reports the error to the user if it persists.
+A job whose checks run tests, builds or generators gets its own `git worktree`. So does every job when the repo has commit hooks or jobs commit in parallel. A text-only job may share a hook-free tree. Commit only own paths (`git commit -- <paths>`). On index.lock, retry 5 times, then escalate; never delete the lock. Jobs sharing a resource run serially, even in separate worktrees. On a shared box, every brief names a `taskset` range and pins each build and benchmark; total threads stay under the box's cores.
 
-These rules let the graph be as wide as the work lets it:
+One fresh reviewer per deliverable, all in parallel. Then one fresh reviewer over the combined change set: no contradictions, one name per concept, no duplicated logic, same behaviour per condition, docs and code agree. Findings become fix deliverables.
 
-1. A node is the smallest unit: one concern with its own files. The manager splits a
-   deliverable by file, by component, by test target and by host when the pieces
-   share no file. The manager splits a node that touches more than one concern
-   before dispatch.
-2. Each read-only question is its own discovery node. The manager never bundles
-   independent questions into one discovery child, and it dispatches all of them
-   together.
-3. Checks and reviews are nodes too. A render, a build check on another base and a
-   per-deliverable review each run when their inputs are there, in parallel with
-   unrelated work. Each per-deliverable reviewer depends on its work nodes. The
-   combined reviewer depends on all reviewer nodes.
-4. Consumers start early. When both briefs fix the data shape between a producer and a
-   consumer, the two nodes start at the same time and the consumer tests against a
-   fixture of that shape.
-5. Idle capacity is a defect. While there are free slots and `ready` prints fewer ids
-   than there are slots, the manager splits todo nodes more before it waits. A running
-   node is never repartitioned: its files stay reserved until it is done or failed. To
-   change its scope, the manager steers it, and new work on its files waits for it. The
-   manager stops splitting when every todo node is one concern with its own files and
-   no split into pieces that share no file remains; then it waits.
-6. A child that may spawn its own children obeys the same graph rules for its
-   sub-deliverables.
+Encode an approved push scope as a stop rule: name the approved branch and old-tip sha, forbid other branches by name. The child runs `git ls-remote` at step 0 and stops on a different remote tip. "You can push" covers only the work it answered. A scoped-review pass does not override the gate's blind-review FAIL.
 
-Example: the deliverable "add an option" splits into `parser` and `cli`, which write
-different files and share a test database. Two independent questions are two
-discovery nodes. `docs` is a second deliverable. Each work node has its reviewer, and
-`review-all` is the combined reviewer.
+## Dispatch graph
 
-```json
-{"nodes": {
-  "ask-config":    {"deps": [], "files": [], "resources": []},
-  "ask-callers":   {"deps": [], "files": [], "resources": []},
-  "parser":        {"deps": ["ask-config"], "files": ["src/parser.py"], "resources": ["test-db"]},
-  "cli":           {"deps": ["ask-callers"], "files": ["src/cli.py"], "resources": ["test-db"]},
-  "docs":          {"deps": [], "files": ["docs/usage.md"], "resources": []},
-  "review-parser": {"deps": ["parser"], "files": [], "resources": []},
-  "review-cli":    {"deps": ["cli"], "files": [], "resources": []},
-  "review-docs":   {"deps": ["docs"], "files": [], "resources": []},
-  "review-all":    {"deps": ["review-parser", "review-cli", "review-docs"], "files": [], "resources": []}
-}}
-```
+Before dispatch, the manager writes each deliverable as a node of a graph file in its scratch directory. A node lists `deps` (nodes whose output it reads), `files` (paths it writes) and `resources` (shared things its checks use). Run `python3 scripts/dag.py check GRAPH` (path relative to this skill). Exit 1 means an invalid graph; fix the split, not the check. Exit 2 means a usage or filesystem error; fix the path, permissions or call and rerun, and tell the user if it persists.
 
-The first `ready` prints `ask-config`, `ask-callers` and `docs`. `parser` and `cli` do not
-run at the same time, because both use `test-db`.
+Keep the graph as wide as the work allows:
 
-`python3 scripts/dag.py ready GRAPH --max N` prints at most N ids that can run. N is the number of
-free child slots of the harness, less one slot for the inspector where the inspection
-rule of the context budget keeps one free. The manager runs
-`python3 scripts/dag.py start GRAPH ID...` on the ids `ready` returned and dispatches only the ids
-`start` accepted. A refused id is not dispatched. Never dispatch
-before `start`. `start` refuses any id that
-`ready` would not return, and any id it gets twice: it exits 1 and writes nothing.
-`check` rejects an absolute path and a path that starts with `..` after normalization.
-Graph paths are repo-relative and compared after normalization; symlinked aliases are not detected.
-`check` also rejects a running or done node whose dependency is not done.
-Every write holds a lock file next to the graph, so concurrent calls are
-serialized. The manager is the only writer of the graph file. It changes node states
-only with `dag.py` commands. It edits the graph by hand only to add or change nodes,
-and it sends that edit in its own message, never together with a `dag.py` call, so no
-call has read the graph when the edit starts. Any other command
-follows the same exit-1 and exit-2 recovery as `check` above. When a child reports,
-`python3 scripts/dag.py done GRAPH ID` or `python3 scripts/dag.py fail GRAPH ID`, then runs `ready` again, runs
-`start` on the ids it prints, and dispatches the accepted ids without waiting for the
-rest. The manager does not wait for a full wave to finish.
+1. A node is one concern with its own files; split by file, component, test target or host when pieces share no file.
+2. Each read-only question is its own discovery node; never bundle independent questions; dispatch them together.
+3. Checks and reviews are nodes. A per-deliverable reviewer depends on its work nodes; the combined reviewer depends on all reviewer nodes.
+4. Producer and consumer start together when both briefs fix the data shape. The consumer tests on a fixture.
+5. Idle capacity is a defect. While `ready` prints fewer ids than free slots, split todo nodes. Never repartition a running node; steer it. Stop when every todo node is one concern with its own files.
+6. A child that may spawn children obeys the same graph rules.
 
-A child that stops without a report holds its files and resources until the manager
-runs `fail`. After the manager stops a child, or sees that a child died or passed its
-deadline, or the harness refused a launch, the manager confirms that the child
-is not running and runs `python3 scripts/dag.py fail GRAPH ID`.
+Scheduler rules:
 
-The dependents of a failed node do not become ready. The same node does the work again:
-the manager changes the brief and runs `python3 scripts/dag.py retry GRAPH ID`. `retry` accepts a
-failed or done node, sets it to todo and resets its done or failed transitive
-dependents to todo; it refuses when the node or a dependent is running. When `ready`
-prints the id again, the manager runs `start` and dispatches on accept.
+- `ready GRAPH --max N` prints at most N runnable ids; N is free child slots less one for the inspector.
+- Run `start GRAPH ID...` on the printed ids; dispatch only accepted ids, never before `start`. `start` refuses unready or repeated ids (exit 1, writes nothing).
+- `check` rejects absolute paths, `..` paths after normalization, and a running or done node with an undone dependency; symlinked aliases pass undetected.
+- Writes hold a lock file next to the graph. The manager is the only writer; state changes go through `dag.py` commands. A hand edit adds or changes nodes in its own message, never with a `dag.py` call.
+- On a child report, run `done GRAPH ID` or `fail GRAPH ID`, then `ready`, then `start`; dispatch accepted ids at once, never waiting for a full wave.
+- A child stopped without a report holds its files until `fail`. After a stop, death, expired deadline, or failed launch, confirm it is not running, then `fail GRAPH ID`.
+- Failed nodes do not unblock dependents. `retry GRAPH ID` resets a failed or done node and its done or failed transitive dependents to todo; it refuses while the node or a dependent runs.
+- A rejecting review fails the review node. `retry WORK_ID` resets the work node and the review node; the review reruns with a fresh reviewer. The node keeps id and files; add new files to `files` before retry and pass `check`.
+- `show GRAPH` prints nodes, states and unmet deps; without the script, keep the same graph and rules by hand.
 
-A rejecting review marks the review node failed. The manager runs `retry WORK_ID` on
-the work node it reviewed: the work node goes back to todo and the review node, a
-transitive dependent of it, resets to todo with it. The manager steers or re-briefs the
-author, and the review runs again with a fresh reviewer that has not seen earlier
-rounds. The node keeps its id and its files. When the fix
-must write a file that the node does not own, the manager adds that file to the `files`
-of the node before the retry, and `check` must pass. `python3 scripts/dag.py show GRAPH`
-prints each node with its state and its unmet deps. Where the harness has no copy of the
-script, the manager keeps the same graph and the same rules by hand.
+## Dispatch briefs
 
-If the harness has a binding skill for tiers and models, load it.
+A user formula or rule arrives in the brief verbatim, with the manager's reading and each ambiguity kept as a candidate. A solution shape the manager rejects (ruled out earlier by measurement or round) is written into the brief up front.
 
-## Dispatch briefs that survive delegation
+- A step feeding a user-facing acceptance rule gets its mutation check in the same brief item. Show the check fails when the change is reverted.
+- Anchor discovery to the ground truth of the class. Give the rule that produces the list (remotes plus `git branch -a`, `gh pr list --search`, label filters); name known instances as examples to confirm, never as scope.
+- Steer the running discovery child on mid-run scope widening; a second child covers only work its brief rules out.
+- Quotes in a research brief arrive verbatim, with author, source number and URL.
+- A brief for work in a tree names where outputs live, forbids other paths, and names the scratch home of throwaway scripts. Make cleanup or an empty `git status` a listed check.
+- A conflict predicted against an old base is not a conflict. Re-run the merge check against the actual new base (a stacked branch's parent tip) before writing resolution steps.
+- Skipped checks name their reason: `UNRUN: <reason>` on the outcome line. A skip without a reason reads as a pass.
+- A child's "fixed" is a claim, not a fact. A re-raised item makes the child quote the current line before classifying it. Never relay an unverified fix claim. Check every review-cited file:line against the current diff; earlier-base reviews cite stale lines.
+- A failure reproducing in no local lane is a configuration question, not numerics. One child first extracts the CI build invocation from workflow and logs and lists differences from a default configure.
+- Confirm the mechanism on the real test before briefing a fix. Toggle the suspected cause on the actual failing test, one variable; report both directions.
+- A mutation proves its own assertion, never the assertion's surroundings; after each mutation, the author lists the untried mutations its checks would still miss.
+- A scheduling or concurrency check must also trip on the baseline, named in the same check.
+- Serialize, don't de-test. A queued GPU leg keeps its full test step; never convert it to CPU-only to fit the queue.
+- When fix rounds keep leaving new findings in the same coordinating component, the component is the problem. The next fix brief tables the design without it.
+- When fresh-review rounds each surface new narrow findings, stop the loop after a named round. Table the rest as documented limits with file:line and hand the push decision to the user.
+- A summary ratio can hide a failing tail. Before an adopt call, require each candidate's full outlier rows with pass/fail lines. A user-inspected plot beats the aggregate.
+- A shared-mechanism diagnosis gets parallel single-variable children: dose-response, error budget (one approximation off at a time), acceptance question.
+- When an experiment can run beside CI, push the confirmed head first. Dispatch review and a CI watcher on the pushed sha. Run the experiment in a third worktree on that sha.
+- A coverage gap in correctness code ships as an asserted test at its seam, not a documented note.
+- A coverage gap behind private state gets a reachability verdict plus a fix proposal. The manager decides on widening the header. Never pair the verdict with an order to fix.
 
-These rules cost report rounds when missing. Put them in every brief that fits.
-
-- **Any step whose result feeds a user-facing acceptance rule** (a release
-  criterion, a speed claim, a security property, a yes/no the brief itself
-  will relay) **gets its mutation check named in the same brief item**, not
-  as a separate item at the end: show the check fails when the change under
-  test is reverted. A check that passes both before and after the change
-  proves nothing.
-
-- **Anchor discovery to the ground truth of the class.** A discovery brief that
-  names specific branches, PR numbers or issue numbers silently misses any
-  other instance: children will not look past the list. Give the rule that
-  produces the list (remotes + `git branch -a`, `gh pr list --search`, label
-  filters) and, if known instances must be included, name them in a separate
-  sentence as examples to confirm, not as the scope.
-- **When the user widens scope mid-run, steer the running discovery child
-  rather than dispatching a second one** for the same documents; steer text
-  appends to its next tool result. A second child is only for work the running
-  one's brief rules out.
-- **Quotes in a research brief must arrive verbatim** with author, source
-  number and URL. Paraphrased maintainer quotes cannot anchor a cut plan.
-- **Forbid stray artifacts:** the brief for any child that works in a
-  repository or scratch tree must say where its outputs live and that no other
-  path gets written. Test scripts and generators leave directories behind;
-  make cleanup or an empty `git status` a listed check.
-- **A conflict predicted against an old base is not a conflict.** Re-run the
-  merge check against the branch's actual new base (for a stacked branch, its
-  parent tip) before writing resolution instructions into a brief; a stale
-  prediction sends the child hunting for a conflict that the rebase already
-  resolved.
-- **Skipped checks must name their reason.** The report contract outcome line
-  accepts `UNRUN: <reason>` for a check the brief allowed skipping (missing
-  toolchain, range-diff identical). A skip without a reason reads as a pass.
-- **A mutation proves its own assertion, never the assertion's surroundings.**
-  A mutation that makes a named test fail shows the test is strong against that one
-  change; it says nothing yet about the mutations the author did not run. After each
-  mutation, the author lists the other mutations it did not try and says which of them
-  its own checks would still miss. That list is the verifier's roadmap.
-- **A scheduling or concurrency check must also be run against the baseline and shown
-  to trip there.** A 'max V100 <= 2' harness that also passes on the un-throttled
-  original proves nothing. Name the baseline run in the same check.
-- **Serialize, don't de-test.** When a Jenkinsfile restructure queues GPU legs to
-  relieve a scarce card, each serialized leg keeps running its own full test step.
-  Do not convert legs to CPU-only to make them cheaper under the queue; a blind
-  reviewer treats silent test-coverage loss as a defect and fails the change.
-- **When repeated fix rounds each leave a fresh residue of findings in the same
-  coordinating component, the component is the problem, not the patch.** The next
-  fix brief tables the design WITHOUT that component instead of scheduling a fourth
-  mechanism for it. A manager that keeps re-skinning it pays a full fix round plus a
-  full review round per attempt and ends with the same verdict.
-
-## Context budget (hard rules)
-
-1. A subagent report is at most 30 lines. Longer goes back for compression; it is
-   not evidence the manager reads.
-2. Evidence longer than 10 lines goes to a file; the report carries the path plus at
-   most 10 decisive lines (the first error on failure).
-3. Diffs, listings and logs travel as path plus counts, never inline. The
-   manager repeats them to the user the same way: sizes of files and patches
-   as counts, never inline content, unless the user asks to see it.
-4. Follow-ups resume the agent that produced the work (same session or task); the
-   manager does not re-read artifacts it already dispatched.
-5. Independent dispatches go out in one message and run concurrently. One report to
-   the user per batch; questions and user decisions are batched the same way.
-6. When the harness runs more than one child at a time, the manager keeps one slot free for the inspector. When the harness has only one slot, the manager does not inspect and the stall rule uses the child's deadline only. Every 15 minutes the manager inspects only the children that are still running and have not reported back in
-   that window. The manager does not read transcripts itself. It dispatches a cheap read-only subagent that
-   reads the tail of the child's transcript and checks the liveness of the child's harness
-   and tool processes. The subagent reports at most 5 lines: the liveness it observed
-   (running, not running, or unknown) and the state of the transcript: progressing, waiting, or hung.
-   Transcript silence alone never stops a child. The manager steers a running child at any time with a changed
-   requirement, even if the child is making progress. A brief
-   without a deadline carries a default deadline of 60 minutes. The stall and deadline rule governs stopping a
-   child for being hung: the manager stops a hung child when inspection shows no progress at two checks in a
-   row and liveness is not running (unknown liveness counts as running), or when the child's deadline has passed. The manager stops a child at
-   any time when the user cancels it, or when the child's work is unsafe. It leaves every
-   other child alone.
-
-   When a rescue or verification child inherits a worktree from an earlier
-   stopped child, its report opens with the `git status --short` of that
-   worktree plus the leftover files it found in the scratch dir. A report
-   that opens 'clean, N commits' without naming what it found at start hides
-   whether partial work was kept, redone or silently discarded.
-
-   When a fix round's branches must survive a later redesign (the previous
-   design is a candidate to go back to), the fix brief names a backup ref
-   (`git branch backup/<name> HEAD` before the first commit of the round) and
-   the report carries its sha; without it the reversal costs an archaeology
-   round.
+- A passing check does not retire a defect. A cell passing on one lane or thread count can still miss on another. Report pass and miss lanes separately; never close a defect on one green lane.
+- No keep/revert call before the regression evidence exists.
+- A blind reviewer gets a commit range starting after the user's own unpushed commits, plus an explicit file list. Never a whole-file snapshot diff. Triage findings by their task-range commit.
+- One fix brief per repo carries the design for the finding's whole class, not only the cited line. Triage the finding read-only; write the rule; fix every place it applies in the repo.
+- A reviewer that overlapped the job's dispatch context is not independent. Its PASS counts as no review.
 
 ## Verifying a brief before dispatch
 
-## Review findings and fix briefs
-
-- One fix brief per repo carries the design the whole class migrates to, not just the line the review named. For each finding, confirm the claim on the code first (a read-only triage child), then write the rule the fix must satisfy; the fix covers every place the rule applies in that repo. A fix that patches only the cited line leaves the sibling repos inconsistent and the next review re-finds the pattern there.
-- Fix briefs that follow a review confirm every finding's cited file:line against the current diff before the fix; a review written against an earlier base cites stale lines, and a fix child working from the line number alone edits the wrong region.
+- Check every precondition a child checks before writing the stop rule; a known contradicting fact rewrites or drops the rule.
+- Anchor named state to this session's observed state, never to remembered state.
+- Give every child absolute paths and a `git rev-parse --show-toplevel` step 0.
+- Approve escalation-fixes in the escalation brief.
+- Check the named remote and branch before writing a push command; have the child use `git remote -v` or `git ls-remote <url>`.
+- Route a redo as a fresh leaf, never a resume; the brief reads leftover state (git status, diff) and explicitly keeps or redoes it.
+- User edits outside the commit paths are the user's own. Never commit, edit or revert them. The brief names them; the review excludes them. An approved commit of them is separate: no Assisted-by trailer, a secret scan first.
 
 ## Process and batch notices
 
-- A process notice from a container a child launched is information for that
-  child, not a task for the manager. Do not steer, stop or re-dispatch: the
-  child sees the failure and owns its fix. The only signal worth relaying is
-  the child's own report when the batch completes.
-- Read the last `exit=` line a child appends to a command, not the harness
-  header: the header reports the exit of the trailing echo and can call a
-  failed check "completed normally".
+- A process notice is a fact about the job's current step, not the job; answer a batch of notices as one batch. Call a status verified only when the job's own exit= line shows it; defer every verdict to the child's report.
+- A job that changes its allocation mid-run names this at the next report.
+- Read the child's last `exit=` line, not the harness header (the trailing echo's).
+- Shell status pitfalls: a bare ssh status is the last command's; `echo exit=$?` after `||` prints 0; a subshell exit covers only its last command. Write step results on separate lines (`cfg=`, `build=`, `ctest=`).
+- A redirect into a missing directory runs nothing and shows the shell's failure; the child runs `mkdir -p` on the log directory first.
+- An approval-blocked child stops: the report says "stopped early, approval blocked", names the blocked command verbatim, and marks undone work as skipped. The brief forbids retries and workarounds. Reroute the step, scope it to tool-free evidence, or wait for the user. Cap blind restarts of a failed driver at 2 attempts; report the verbatim error.
 
-A brief gets a pre-dispatch check against facts the manager already knows; a stale
-brief costs the full round trip of the child discovering the error and escalating.
+A rescue child inherits the stopped child's leftover state, not its plan. Its brief opens with that worktree's `git status --short` and diff stat, transcript keyword hits, and the scratch-dir file list. It says what it keeps, redoes or discards and why. Its report opens the same way. A cleanup brief follows a state probe only: step 0 worktree authorization, step 1 cleanup of the named tree. When a fix round's branches must survive a redesign, the brief names a backup ref (`git branch backup/<name> HEAD` first). The report carries its sha.
 
-- **Verify every precondition a child will check before writing the brief's stop
-  rule.** If a known fact contradicts the stop rule (a file type, a symlink, a
-  repo layout, a config key), rewrite or drop the rule before dispatch. A brief
-  the child stops on at step 0 has spent the child's whole budget on nothing.
-- **A brief that names a specific state must anchor to the observed state of this
-  session, not to a remembered state from an earlier session.** Environment
-  drifts; a brief that claims `config.yaml is a symlink` without a current read
-  fails at dispatch time even if it was true before.
-- **Approve escalation-fixes in the brief of the escalation, not in the reply to
-  the user.** An [ESCALATE-TO-MANAGER] that names the exact commands to run lets
-  the fix brief copy them. An escalation without a proposed fix costs the manager
-  a speculative-planning round before re-dispatch.
-- **Verify the remote/branch state a brief names before writing the push command
-  into it.** A brief that names fork remote `X` while the worktree's actual
-  remote for it is `origin` makes the child's first command fail; have the child
-  resolve the remote with `git remote -v` and use the result, or re-check with
-  `git ls-remote <url>` so the command works from any worktree.
-- **When a child is found to have made no changes, route the redo as a fresh
-  leaf, not a resume of the stopped one.** "Resume" of a cancelled run inherits
-  its partial edits and guesses; the redo brief must read the leftover state
-  first (git status/diff) and keep or redo it explicitly, never discard it
-  blindly.
-- **User text edits live in the same tree as the task edit:** out-of-commit paths
-  are the user's own; never commit, edit or revert them. The brief names them and
-  the review excludes them (`--exclude`). If the user later approves committing
-  them, that gets a **separate** commit from the task work, with no Assisted-by
-  trailer, and a secret-scan over the diff before the commit.
+## Context budget
 
-## Report contract (subagent to manager)
+1. A subagent report is at most 30 lines; longer goes back for compression. Evidence is machine-checked: test names, query counts, grep hits.
+2. Evidence over 10 lines goes to a file; the report carries the path plus at most 10 decisive lines, on failure the first error.
+3. Diffs, listings and logs travel as path plus counts, never inline. Repeat them to the user the same way unless asked.
+4. Follow-ups resume the agent that produced the work; the manager does not re-read dispatched artifacts.
+5. Independent dispatches go out in one message and run concurrently; one user report per batch; questions and decisions batch the same way.
+6. With several child slots, keep one free for the inspector; with one slot, use only the child's deadline. Every 15 minutes, a cheap read-only subagent inspects still-running, silent children. It reads the transcript tail, checks the liveness of the child's processes, and reports at most 5 lines: liveness (running, not running, unknown); transcript state (progressing, waiting, hung). The manager reads no transcripts itself. Transcript silence alone never stops a child. Steer a running child at any time. Default deadline is 60 minutes. Stop a hung child after two checks with no progress and liveness not running (unknown counts as running), or at deadline. Stop any child on user cancel or unsafe work; leave every other child alone.
 
-The first line of each report names the provider and the model the subagent uses,
-read from its own runtime, not from the brief. The manager gives that line to the user.
+## Report contract
 
-1. Outcome: done, blocked, or partial (partial names what is left and why).
-   A check the brief allowed skipping is reported as `UNRUN: <reason>`, never
-   silently dropped.
-2. Evidence: the check that ran, the exact command, its exit status via
-   `echo "exit=$?"` on the same line, at most 10 decisive lines verbatim.
+The first line names the provider and model the subagent uses, read from its own runtime; the manager relays it to the user.
+
+1. Outcome: done, blocked, or partial (partial names what is left and why). A stopped job names its stopper: brief rule, user message, or harness. An allowed skip is `UNRUN: <reason>`, never silently dropped.
+2. Evidence: the check that ran, the exact command, its exit status via `echo "exit=$?"` on the same line, at most 10 decisive lines verbatim. A mutation check names passed, failed-loud (caught at a contract check), or silent-pass (the defect went through). "Reverted and the tree is clean" is a fourth line, never a substitute.
 3. Open decisions, each with options and a recommendation.
 4. Nothing else.
 
 ## Manager to user
 
-One message per batch: deliverables passed with the check that proved each;
-decisions taken alone, one line each; decisions needing the user, batched, each with
-a recommendation. Subagent evidence is relayed, never paraphrased.
+One message per batch: deliverables passed with the check that proved each; decisions taken alone, one line each; decisions needing the user, batched, each with a recommendation. Relay subagent evidence; never paraphrase it.
 
-- **The user is not a status line.** Never end a report with a pending question
-  the manager can answer, and never ask 'want me to continue' when the next
-  step is already decided. If one question must end the message, it is about
-  goal or scope, never about the manager's own progress.
-- **The user answers only questions only the user can answer.** A choice between
-  options the manager or an experiment can settle (which of several GPU cards a
-  leg should take, which of two coverage/serialization shapes) is not such a
-  question. Pick a default, state it, let the work proceed, and let the user veto
-  after the fact.
-- **Background-batch messages carry result, not state.** Name the deliverable,
-  the check that proved it, and the decisions left. When the harness delivers
-  batch results on your behalf, skip the separate 'it is running' note after
-  the dispatch.
+- The user is not a status line. Never end a report with a question the manager can answer, or "want me to continue" when the next step is decided. A closing question is about goal or scope.
+- A choice the manager or an experiment can settle gets a stated default and work proceeds; the user can veto later.
+- Background-batch messages carry result, not state: the deliverable, the check that proved it, the decisions left. Skip the separate "it is running" note.
