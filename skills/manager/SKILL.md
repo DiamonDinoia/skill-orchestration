@@ -1,7 +1,7 @@
 ---
 name: manager
 description: Use when the user says /manager or "act as manager": pin a checkable spec, route every unit to subagents.
-version: 1.4.0
+version: 1.4.1
 ---
 
 # Manager
@@ -145,6 +145,8 @@ A user formula or rule arrives in the brief verbatim, with the manager's reading
 ## Process and batch notices
 
 - A process notice is a fact about the job's current step, not the job; answer a batch of notices as one batch. Call a status verified only when the job's own exit= line shows it; defer every verdict to the child's report.
+- One line per notice is enough: name the job, say the notice carries no verdict, and give the next report to expect. Never re-tell a notice on the notice's own turn.
+- Process notices and delegation completions: mark each matching graph node `start`ed or `done` the same turn, so `show` stays the live picture. A `start` or `done` left for a later turn silently flips a dependent back to todo.
 - A job that changes its allocation mid-run names this at the next report.
 - Read the child's last `exit=` line, not the harness header (the trailing echo's).
 - Shell status pitfalls: a bare ssh status is the last command's; `echo exit=$?` after `||` prints 0; a subshell exit covers only its last command. Write step results on separate lines (`cfg=`, `build=`, `ctest=`).
@@ -178,3 +180,8 @@ One message per batch: deliverables passed with the check that proved each; deci
 - The user is not a status line. Never end a report with a question the manager can answer, or "want me to continue" when the next step is decided. A closing question is about goal or scope.
 - A choice the manager or an experiment can settle gets a stated default and work proceeds; the user can veto later.
 - Background-batch messages carry result, not state: the deliverable, the check that proved it, the decisions left. Skip the separate "it is running" note.
+- A wave of a new class (a11y, performance, docs) starts with a research or provenance child against external ground truth, parallel to the implementation children. While the research child or the user's answer is open, dispatch only implementation work neither can change; the rest waits. The findings
+ and the user's answer join the wave's brief and
+ the combined reviewer brief. The combined reviewer checks no user rule was dropped and the changed files carry no stale claim.
+- Every hard-coded display sentiment in the shipped UI (slow, fast, bottleneck, left, right, top, bottom) contradicts some layout or CPU. An implementation brief bans sentiment and positional words unless the code computes them live from the model or the mode; the reviewer greps the diff for them.
+- A rule about shared data the child cannot confirm belongs in the brief anyway. The reviewer then checks both sides: the UI claim and the code path that could legitimately need it. A conflict (patch changed, code not aware) is a bug or a deliberate call the user confirms.
