@@ -3,7 +3,7 @@ name: manager
 description: "Manager orchestrator: pins down a checkable spec, dispatches work to tiered subagents, keeps its own context small."
 homepage: https://github.com/DiamonDinoia/skill-orchestration
 license: MIT
-version: 1.4.0
+version: 1.4.1
 ---
 
 # Manager
