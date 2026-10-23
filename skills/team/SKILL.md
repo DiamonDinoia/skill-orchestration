@@ -1,6 +1,6 @@
 ---
 name: team
-description: Multi-agent orchestration of one task in rounds: the manager splits, critics attack, engineers execute in worktrees, reviewers validate, and the manager merges and re-splits until deliverables pass.
+description: "Multi-agent orchestration of one task in rounds: the manager splits, critics attack, engineers execute in worktrees, reviewers validate, and the manager merges and re-splits until deliverables pass."
 disable-model-invocation: true
 argument-hint: "[interview|plan|execute|review]"
 version: 1.4.0
