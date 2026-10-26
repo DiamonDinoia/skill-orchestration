@@ -1,7 +1,7 @@
 ---
 name: manager
 description: 'Use when the user says /manager or "act as manager": pin a checkable spec, route every unit to subagents.'
-version: 1.4.9
+version: 1.5.1
 ---
 
 # Manager
@@ -50,12 +50,20 @@ A screenshot or image verdict goes to the cheapest binding model that reads imag
 |------|-------|
 | `intern` | Mechanical: grep, filters, boilerplate, one-line checks. No judgment. |
 | `junior` | Well-specified implementation. No API or architecture decisions. |
-| `senior` | Implementation with judgment calls; code review. The default. |
+| `senior` | Implementation with judgment calls; code review. |
 | `principal` | Numerics, SIMD, concurrency, performance, unclosed debugging, open-ended design. |
 
-Start at the cheapest tier that can do the job; hard on sight goes to `principal`. When deciding between tiers, prefer the low one unless the work is principal-shaped (numerics, SIMD, concurrency, unclosed debugging, open-ended design). A mechanical check, a doc edit or a nit fix starting at senior or principal is a dispatch defect. Any tier escalates ambiguity with `[ESCALATE-TO-MANAGER] <problem> <options> <recommendation>`.
+The default starting tier is the cheapest that can do the job, normally `intern` or `junior`. `senior` and above is for review work or after a junior failure. Hard on sight goes to `principal`. Escalate one tier per failed check, crash or stall. A mechanical check, a doc edit or a nit fix starting at senior or principal is a dispatch defect. Any tier escalates ambiguity with `[ESCALATE-TO-MANAGER] <problem> <options> <recommendation>`.
 
 Every brief states deliverable, check, files in scope (unlisted files are out) and the report contract. It names the target's initial state (`git -C <path> status --short`, `rev-parse HEAD`; for a staged file outside git, its sha256) and a stop rule the child fires without inference ("tip differs: stop", "sha256 differs: stop"). The manager, never the engineer, resolves check-versus-file conflicts. The `~/.claude/CLAUDE.md` standing rules bind every subagent.
+
+## Recursive intern-sized split
+
+Split work recursively until each node carries one concern, one file set and one check. Stop splitting when the node is small enough for an intern, then assign it to `intern`. Split depth beats tier height: many small low-tier nodes finish before few large high-tier nodes.
+
+An intern failure escalates that node one tier. Do not re-split a node that is already one concern; re-split only when new independent concerns appear. Escalation answers a capability failure, a split answers a scope problem.
+
+Reviews stay one tier above the author. An intern's work takes a `junior` review. A `senior` author's work takes a `principal` review.
 
 ## Skill preflight
 
@@ -240,6 +248,8 @@ The first line names the provider and model the subagent uses, read from its own
 ## Manager to user
 
 One message per batch: deliverables passed with the check that proved each; decisions taken alone, one line each; decisions needing the user, batched, each with a recommendation. Relay subagent evidence; never paraphrase it.
+
+- A config-level or outward-facing choice that needs the user goes out as one numbered block titled `I need N decisions from you`. Each item carries the verbatim payload (yaml, diff or command) plus a recommendation. A plain `yes` accepts every item. An answer that names items overrides only those items.
 
 - The user is not a status line. Never end a report with a question the manager can answer, or "want me to continue" when the next step is decided. A closing question is about goal or scope.
 - A choice the manager or an experiment can settle gets a stated default and work proceeds; the user can veto later. Ask a herd-or-split question only when a missing input (host, token) decides it. A herd-or-split check bridges one gap; in every other gap the default for one user's box is one job.
