@@ -61,7 +61,7 @@ def check_tiers():
     assert pick(tier="intern", failed=["claude-opus-9"])["model"] is None                # failed Opus is above every intern rung
     health(a_Top=True, b_Mid=True)
     f = pick(tier="principal")["flags"]                                                  # flatiron pick: effort and skills
-    assert "--reasoning max" in f and "-s brainstorm -s team -s manager" in f, f
+    assert "--reasoning high" in f and "-s brainstorm -s team -s manager" in f, f
     f = pick(tier="intern")["flags"]
     assert "-s " not in f and "--reasoning low" in f, f
     health(a_Top=False, b_Mid=False)
@@ -94,9 +94,9 @@ def check_effort_clamp():
         return [o["flags"].split("--reasoning ", 1)[1].split()[0] for o in outs]
 
     assert efforts_of(QWEN, "senior") == ["xhigh"] * 3                # high -> xhigh
-    assert efforts_of(QWEN, "principal") == ["xhigh"] * 3             # max: nothing above -> highest accepted
+    assert efforts_of(QWEN, "principal") == ["xhigh"] * 3             # principal high -> xhigh
     assert efforts_of(MIST, "intern") == ["high"] * 3                 # low -> high
-    assert efforts_of(MIST, "principal") == ["high"] * 3              # max -> high
+    assert efforts_of(MIST, "principal") == ["high"] * 3              # principal high -> high
     assert efforts_of("n/Unlisted", "junior") == ["medium"] * 3       # no entry: the tier value stays
 
 
@@ -131,7 +131,7 @@ def check_lanes():
     assert [x["model"] for x in lanes(kind="vision")] == ["a/Top", "b/Mid"], "kind vision == --needs vision"
     assert [x["model"] for x in lanes(tier="principal")] == ["a/Top", "b/Mid", "c/Lo"], "principal keeps the top-3 rank values (5,4,3)"
     f = lanes(tier="principal")[0]["flags"]                                         # the tier's effort and skills, like pick's
-    assert "--reasoning max" in f and "-s brainstorm -s team -s manager" in f, f
+    assert "--reasoning high" in f and "-s brainstorm -s team -s manager" in f, f
     health(a_Top=False, b_Mid=False, c_Lo=False, d_NoVis=False, e_Down=False)      # all flatiron down
     out = lanes()
     assert len(out) == 1 and out[0].get("fallback") is True, out                    # one fallback entry

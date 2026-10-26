@@ -43,6 +43,6 @@
   "intern": {"reasoning_effort": "low", "prefer": "cheapest", "skills": [], "fallback": ["haiku", "sonnet"]},
   "junior": {"reasoning_effort": "medium", "prefer": "cheapest", "skills": [], "fallback": ["haiku", "sonnet", "opus"]},
   "senior": {"reasoning_effort": "high", "skills": ["brainstorm"], "fallback": ["sonnet", "opus"]},
-  "principal": {"reasoning_effort": "max", "skills": ["brainstorm", "team", "manager"], "fallback": ["opus"]}
+  "principal": {"reasoning_effort": "high", "skills": ["brainstorm", "team", "manager"], "fallback": ["opus"]}
  }
 }
