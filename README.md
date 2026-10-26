@@ -1,7 +1,8 @@
 # orchestration
 
-Five skills that share one pipeline: brainstorm explores a decision, spec pins it down,
+Six skills share one pipeline: brainstorm explores a decision, spec pins it down,
 parallel and team execute it, and manager is the persistent role the others build on.
+`tiered-subagent-dispatch` runs the delegation ladder in Hermes.
 Each harness maps the four dispatch tiers (`intern`/`junior`/`senior`/`principal`) to its
 own models; the skills name a tier, never a model.
 
@@ -29,15 +30,15 @@ rule-only harnesses have no session hook and keep their own defaults.
 | Codex CLI | `codex plugin marketplace add DiamonDinoia/skill-orchestration`, then `codex plugin add orchestration@orchestration` |
 | Gemini CLI | `gemini extensions install https://github.com/DiamonDinoia/skill-orchestration --consent` |
 | opencode (by hand, scripted) | `git clone https://github.com/DiamonDinoia/skill-orchestration && ./skill-orchestration/install-opencode.sh` |
-| by hand | `git clone https://github.com/DiamonDinoia/skill-orchestration && for s in manager team brainstorm spec parallel; do ln -s "$PWD/skill-orchestration/skills/$s" ~/.claude/skills/$s; done` |
+| by hand | `git clone https://github.com/DiamonDinoia/skill-orchestration && for s in manager team brainstorm spec parallel tiered-subagent-dispatch; do ln -s "$PWD/skill-orchestration/skills/$s" ~/.claude/skills/$s; done` |
 
 The three harnesses with a native manifest carry one in this repository: `.claude-plugin/` for
 Claude Code, `.codex-plugin/` for Codex, and `gemini-extension.json` for Gemini CLI. opencode has
-no plugin system — `install-opencode.sh` links the five skills, the five command shims and the
+no plugin system — `install-opencode.sh` links the five generic skills, the five command shims and the
 tier agents from a checkout; anything else: symlink by hand (last row).
 
 Rule-only harnesses (Cursor rules, Cline, Windsurf, Kiro, Qoder, Grok, Devin, ...) receive the
-manager rule copy — the four other skills orchestrate subagents, which those harnesses lack.
+manager rule copy — the other skills orchestrate subagents, which those harnesses lack.
 Edit `skills/manager/SKILL.md` and run `scripts/build-rules.sh` to regenerate every rule copy.
 
 Claude Code: in `/plugin`, enable auto-update for the `orchestration` marketplace.
@@ -45,12 +46,12 @@ Claude Code: in `/plugin`, enable auto-update for the `orchestration` marketplac
 orchestration@orchestration` pulls the new release.
 
 Restart the harness after installing. `/manager <task>` starts the role; "stop manager" ends it.
-The other four skills trigger on their descriptions or by name (`/team`, `/brainstorm`, ...).
+The other skills trigger on their descriptions or by name (`/team`, `/brainstorm`, ...).
 
 ## Validation
 
 `test/run.sh` builds a container with each harness, installs the plugin with each mechanism and
-checks that each harness finds all five skills. A copy with an invalid skill name must fail on
+checks that each harness finds all five generic skills. A copy with an invalid skill name must fail on
 the name check. It also runs `skills/parallel/scripts/waves.py --selftest` from the installed copy.
 
 ```sh
