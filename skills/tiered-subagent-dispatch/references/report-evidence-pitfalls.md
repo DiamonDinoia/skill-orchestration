@@ -1,0 +1,27 @@
+# Report and evidence pitfalls
+
+Load before accepting a child's report or a check result.
+
+- The `-Q` log can hold only the child's LAST message. If background notifications arrived after its report, that last message is a short "those were stale builds" reply and the real report is lost from the log. Recover it from `~/.hermes/state.db`: `select content from messages where session_id=? and role='assistant' order by rowid`, then take the last long one (session id is on the log's `session_id:` line). Use Python sqlite3 because shell output may be redacted here.
+
+- A probe's verdict is its own return code and last row, never a variable it printed at the start. A probe once printed the stale upper bound of a fixed sigma scan instead of the verdict; the child returned PASS while the library kept failing the demo. Final-verification and blind-review pitfalls: `references/verification-pass-pitfalls.md`.
+
+- Exit code 0 is not success. A child can end with garbled tool-call tokens and no report while having changed nothing. Check the log tail and `git diff --stat`/file mtimes; if nothing moved, treat it as a failure and escalate. A background-process notice that says "exit code 0" for a command ending in `; echo "exit=$?" >> <log>` reports the `echo`, not the tool. Read the `exit=` line in the log before you tell the user anything passed. Until then, say only that the step ended. An exit 127 from a child's background step means the binary or the script was not there when the step started, and the redirection already truncated the result file it was writing. Never count such a file as data. The child builds and `ls`es every binary its brief names BEFORE it runs it, and the brief names each build step before its first run. Otherwise one run's silent emptiness becomes the next step's input.
+
+- Gate a check on its printed marker line (`*_PASS`, `all checks passed`), not on the process exit code, when the tool can crash at exit. A crash at shutdown (heap corruption in teardown, then `timeout` returning 124) comes after a valid PASS line. The brief names the marker. The report quotes the marker and the exit code, each one on its own.
+
+- A capture pipeline makes the exit code worthless twice over. `./test | tail -2 > log; echo "exit=$?"` records the exit of `tail`, and a trailing `> log 2>&1` on the whole compound makes even the last `; echo` report the redirect. The brief requires the form `./test > log 2>&1; echo "exit=$?" >> log` for every build, test and sweep run (redirect the binary itself, capture its exit immediately, never through a pipe or a compound redirect), and the report contract rejects any exit status that came through a pipe.
+
+- Exit 130 from a child's background build/test means it was interrupted, not a compile failure and not a pass. Steer the child to rerun only the targets the deliverable needs and to report the check as UNRUN if it can't finish.
+
+- A reported FAILURE can be wrong too, the child's or your own. Rerun the check before escalating (e.g. a TUI slash command typed with text+Enter in one `tmux send-keys` never submits). Before sending your own repro back as a failure, make sure it waited for async state: a TUI capture taken before gateway session info lands shows an "empty" banner and costs a full fix round.
+
+- A number a reviewer proposes (a sample size, a bound, a limit) is a claim, not a fix. A subagent computes it (a stdlib `python3 -c`) before it goes into a brief; a review's "at least 52" was really 46, and the child wrote the wrong value because the brief required it.
+
+- A rerun of a check that consumes live state is not equivalent to the earlier run. A message read through a bus `inbox` flips the row to read; the same call a second later prints `no messages`, and a rerun that starts a fresh sender after the earlier waiter timed out can race the other way too (the retry pass only means the timing landed, not that an earlier fail was a bug or a flake). The brief orders the rerun: probe the state first (dump the effected row or its log), then decide whether the failing run needs a fix or a rerun with the sender started first, and report which one it was.
+
+- A check on an idempotent-looking call (ask a question, post a message) counts the rows the agent created, not only the text it got back. A model that issues the same call twice with identical arguments creates two rows and blocks on the second; the manager's answer satisfies the first, and the child's log then reports TIMEOUT from the duplicate while the looked-at criterion (the CLI answered, exit 0) passed. The live row count grouped by the call's identity key is the only reliable detector; unit-level dedupe never fires in the real-agent scenario because the two calls are two separate tool invocations. The brief hands the child the counting command against the live DB and names the acceptable count.
+
+- A retried tool call can return the right answer while the side effect the first call was there to cause never happens. When the test asks the agent to write the answer to a file, the file's content is the verdict; the answer text in the log is proof of the retry, not of the check. Keep the evidence per criterion (file content, row count, process exit, CLI exit) and count a check green only when every criterion has its own evidence.
+
+- A shell pipeline or `&&` chain in a Hermes terminal call gets a pty and dies at exit 144 on long output. Child briefs require `./bin > log 2>&1; echo "exit=$?" >> log` and log parsing, matching the finufft skill's verification section.
