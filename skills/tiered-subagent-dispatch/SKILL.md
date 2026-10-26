@@ -1,6 +1,7 @@
 ---
 name: tiered-subagent-dispatch
 description: "Use when delegating in Hermes: best flatiron model, Sonnet, Opus, blind review."
+version: 1.0.0
 ---
 
 # Tiered subagent dispatch (Hermes only)
@@ -52,6 +53,7 @@ The table lives in `references/flatiron-routing.json`. `hermes-dispatch-route sy
 - **Monitor cadence rule.** Hermes ends a stalled async child after 450 s idle; a child stalled in one tool ends after 1200 s (tools/async_delegation.py:75-78), and Hermes sends the result as a completion. The manager inspects on an event, never on a clock: a child's deadline passes, or the user asks. It inspects only children that have not reported back. When the harness runs more than one child at a time, the manager keeps one slot free for the inspector: a cheap read-only subagent that reads the tail of the child's live transcript and checks the liveness of the child's harness and tool processes. It reports running, not running, or unknown; unknown counts as running. Transcript silence alone never stops a child. The manager steers a running child at any time with a changed requirement. It stops a hung child when two checks in a row show no progress and liveness is not running. A brief without a deadline carries a default deadline of 60 minutes. The manager stops a child whose deadline has passed, and any child when the user cancels it or the work is unsafe.
 - **Dispatch brief skills rule.** Every dispatch brief names the skills `ste`, `unslop` and `ponytail`. It tells the child to load them with `skill_view`.
 - **Report first line rule.** Every child report starts with one line that names its provider and model, read from the runtime of the child. The manager quotes the `Model:` line of the `delegate_task` completion header for a `delegate_task` child, and the launcher's `-flags.txt` file for a `hermes chat` job. The manager quotes that line in its report to the user.
+- **Child visibility rule.** In-process `delegate_task` children show live in the TUI. Ctrl+T opens the agents overlay. Pressing `t` on a row opens the child's live transcript tail. A background `hermes chat -Q` job is invisible there. So the log-and-watch rule of step 4 stays MANDATORY in every batch status message. The manager quotes the log path and a `pgrep` watch command, as step 4 requires.
 - **Removing a tool: official path first.** A read-only research subagent reads the tool's docs, `--help` and installed source, and writes the documented uninstall sequence with what each step leaves behind. The purge job runs those commands, then the installer's own uninstall (`uv tool uninstall`, `cargo uninstall`), and edits by hand only the leftovers. A tool that serves the route the subagents themselves use (a local LLM proxy) is removed last: clients switch to the direct route, a test prompt passes on it, and the service stops only when it has had no client for 2 minutes.
 - **Flatiron first, always.** Every subagent goes to a flatiron model if any healthy one fits; Anthropic models are only the fallback of the tier. Fable is excluded unless the user explicitly allows it for a named deliverable. That permission covers only that deliverable (a UI/UX audit) and lapses with it. Dispatch it as `hermes chat --provider claude-subscription-directsdk-experimental -m fable ...`. The other deliverables of the same batch stay on the normal ladder.
 - **Spread parallel work over the whole healthy flatiron set.** The user wants every up flatiron model loaded at once, for more tokens per second. Eligibility is a hard filter for `pick`, `lanes` and `assign`. A flatiron model is eligible for a kind with a `routes` list only if the list in `references/flatiron-routing.json` names it. It must be healthy and pass `--needs`. The kind `vision` takes every healthy model with `features` vision true. The `floors` key of `references/flatiron-routing.json` is the capability cut line. Code, debug, research and frontend are floored with the anchor named in `floors`. A model the ranker places in a floored kind must rank at least as high as the anchor. The kinds prose and mechanical have no floor. A missing anchor entry fails closed. A kind whose anchor is gone from the rank map fails closed too. That kind takes no new model, and `sync` logs a line that names the kind when it holds a new model back. Existing list members are never moved or removed by placement. The user's words: "if the model is too dumb for the task though it cannot be used". With no eligible healthy model, the tier fallback ladder applies. The default `pick` serves one node. All `delegate_task` children land on the configured `delegation.model`, unless their tier carries a model pin. The tiers intern and junior carry a model pin. A multi-model wave runs as `hermes chat` lane jobs. That wave uses one `assign` call with each ready node of the batch, as in the `Parallel lanes` subsection. Never split one node for show.
@@ -81,6 +83,22 @@ In-process `delegate_task` children use `delegation.provider/model` in config.ya
 ### Parallel lanes
 
 Before each batch, a routing subagent runs `hermes-dispatch-route assign NODE=KIND:TIER[:NEED,NEED] ...` with each ready node of the batch. The command prints one JSON entry for each node. Each entry has node, kind, tier, provider, model, flags, load, reason and fallback. Each node goes to the eligible model with the fewest in-flight jobs, and ties break by pick order. The count increases by 1 for each assignment in the batch. Each model has a cap: the `capacity` map in `references/flatiron-routing.json`, default 1. `assign` skips a model whose in-flight count plus this batch's assignments reached its cap. When every eligible model is full, the node goes to the model with the most capacity left (negative counts kept), never to the fallback ladder. The in-flight count is a live scan of `hermes chat --provider flatiron` processes. The scan matches the model argument in the forms `-m MODEL`, `--model MODEL` and `--model=MODEL`. There is no state file, so the count cannot go stale. Each node launches as `hermes chat <flags>` per step 3. A vision node runs with `--needs vision`. The standing rules hold the eligibility rule and the user's words. The command re-reads health each batch. No eligible model fits: one entry with `"fallback": true`, the rung `pick` would return.
+
+### Outcome ledger (model-strength learning)
+
+The manager (or a routing child) appends one row to `/home/marco/.hermes/cache/dispatch-route/outcomes.jsonl` when a child completes. The leaf child does not write the ledger. One JSONL row per completion: `ts`, `node`, `kind`, `tier`, `provider`, `model`, `verdict` (pass, fail, or escalated), `cause` (one line).
+
+Before each dispatch batch, the routing child runs `tail -200` on the ledger. It adds a leaders-per-kind summary to each new brief: model, observed pass rate on that kind, n. A pattern with at least 5 consistent outcomes goes into the model-notes block at the next review round.
+
+When a brief pins a tier or model, the ledger row records the landed model from the completion `Model:` line (report first line rule). A fallback landing is flagged, not rerun (the flag rule of `Flatiron outages are temporary`, rule 6f).
+
+The ledger is per-host cache. Never commit it. Rotate it at 10k rows.
+
+#### Model notes (seed)
+
+- Observed 2026-10-05 session: Kimi-K3 failed long-horizon analysis jobs that had no hard checks.
+- Observed 2026-10-05 session: Opus passed derivation-heavy numerics jobs.
+- Flatiron outages are outages, not quality failures (Pitfalls: a model dying mid-run is an outage, not a quality failure).
 
 ## Procedure
 
