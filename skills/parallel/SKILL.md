@@ -18,7 +18,7 @@ If two units name one file, merge them and re-check. Unowned files are gaps, not
 - Deliverable: one statement, checkable on its own.
 - Check: a command exiting nonzero while the deliverable is unmet.
 - File scope: exactly the disjoint set.
-- Tier: `intern`, `junior`, `senior` (default) or `principal`, cheapest that meets the check. Mechanical to intern, well-specified to junior, judgment to senior, hard-on-sight to principal.
+- Tier: `intern`, `junior`, `senior` (default) or `principal`, cheapest that meets the check. Mechanical to intern, well-specified to junior, judgment to senior, hard-on-sight to principal. A failed check or crash escalates the unit one tier.
 
 ## Dispatch and report
 

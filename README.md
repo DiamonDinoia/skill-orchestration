@@ -30,7 +30,7 @@ rule-only harnesses have no session hook and keep their own defaults.
 | Codex CLI | `codex plugin marketplace add DiamonDinoia/skill-orchestration`, then `codex plugin add orchestration@orchestration` |
 | Gemini CLI | `gemini extensions install https://github.com/DiamonDinoia/skill-orchestration --consent` |
 | opencode (by hand, scripted) | `git clone https://github.com/DiamonDinoia/skill-orchestration && ./skill-orchestration/install-opencode.sh` |
-|| by hand | `git clone https://github.com/DiamonDinoia/skill-orchestration && for s in manager team brainstorm spec parallel; do ln -s "$PWD/skill-orchestration/skills/$s" ~/.claude/skills/$s; done` |
+| by hand (symlink) | `git clone https://github.com/DiamonDinoia/skill-orchestration && for s in manager team brainstorm spec parallel; do ln -s "$PWD/skill-orchestration/skills/$s" ~/.claude/skills/$s; done` |
 
 The three harnesses with a native manifest carry one in this repository: `.claude-plugin/` for
 Claude Code, `.codex-plugin/` for Codex, and `gemini-extension.json` for Gemini CLI. opencode has

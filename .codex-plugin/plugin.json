@@ -11,7 +11,7 @@
   "interface": {
     "displayName": "Orchestration",
     "shortDescription": "Manager, team, brainstorm, spec and parallel skills for agent orchestration",
-    "longDescription": "Five skills that share one pipeline: brainstorm explores a decision (recon dispatch, batched questions with recommendations, decision log), spec turns it into deliverables each with a check that can fail, parallel executes the spec as disjoint wave-scheduled units, team runs multi-agent rounds in worktrees, and manager is the persistent tier-dispatch role the others build on.",
+    "longDescription": "Six skills (five for other harnesses; tiered-subagent-dispatch is Hermes-only) that share one pipeline: brainstorm explores a decision (recon dispatch, batched questions with recommendations, decision log), spec turns it into deliverables each with a check that can fail, parallel executes the spec as disjoint wave-scheduled units, team runs multi-agent rounds in worktrees, and manager is the persistent tier-dispatch role the others build on.",
     "developerName": "Marco Barbone",
     "category": "Developer Tools",
     "capabilities": ["Interactive", "Read", "Write"],
