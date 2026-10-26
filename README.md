@@ -34,12 +34,12 @@ rule-only harnesses have no session hook and keep their own defaults.
 
 The three harnesses with a native manifest carry one in this repository: `.claude-plugin/` for
 Claude Code, `.codex-plugin/` for Codex, and `gemini-extension.json` for Gemini CLI. opencode has
-no plugin system — `install-opencode.sh` links the five generic skills, the five command shims and the
+no plugin system. `install-opencode.sh` links the five generic skills, the five command shims and the
 tier agents from a checkout; anything else: symlink by hand (last row). The last row covers the five
 generic skills; `tiered-subagent-dispatch` is Hermes-only: link it into `~/.hermes/skills/` by hand.
 
 Rule-only harnesses (Cursor rules, Cline, Windsurf, Kiro, Qoder, Grok, Devin, ...) receive the
-manager rule copy — the other skills orchestrate subagents, which those harnesses lack.
+manager rule copy. The other skills orchestrate subagents, which those harnesses lack.
 Edit `skills/manager/SKILL.md` and run `scripts/build-rules.sh` to regenerate every rule copy.
 
 Claude Code: in `/plugin`, enable auto-update for the `orchestration` marketplace.
