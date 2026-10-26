@@ -675,6 +675,8 @@ def check_principal_anchor():
     cfg = json.loads((jpath if jpath.is_file() else r.ROUTING_FILE).read_text())
     anchor = cfg["floors"]["code"]                                         # moonshotai/Kimi-K3
     r.routing = lambda: cfg
+    # in-flight scan is live machine state; stub it so a busy host cannot skip the anchor
+    r.inflight_counts = lambda: {}
     r.flatiron_status = lambda *a: {m: {"ok": True} for m in cfg["rank"]}
     assert r.pick("code", "principal", [], False)["model"] == anchor       # the staged order leads with MiMo
     cfg["routes"]["code"] = [m for m in cfg["routes"]["code"] if m != anchor] + [anchor]
