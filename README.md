@@ -12,6 +12,7 @@ own models; the skills name a tier, never a model.
 | `parallel` | Executes a spec as disjoint-file dispatch units; `scripts/waves.py` (stdlib `graphlib`) computes waves and the critical path |
 | `team` | Multi-agent rounds (triage/plan/execute/review) in worktrees; the invoking agent assumes the manager role |
 | `manager` | Persistent orchestration role: spec first, tiered dispatch, hard context budget |
+| `tiered-subagent-dispatch` | Delegation in Hermes: best flatiron model, Sonnet, Opus, then blind review |
 
 At session start the Claude Code hook runs `scripts/models.py`: it fetches the available model
 list from the already-configured provider (Anthropic or OpenAI API key, else the opencode
