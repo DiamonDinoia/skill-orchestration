@@ -27,7 +27,8 @@ A brainstorm decision log (`../brainstorm/SKILL.md`) or a raw request. Open inte
 1. Show the full draft once, numbered for line reference.
 2. Fold each round's requests into one revised draft, shown in full again.
 3. Batch questions likewise, each with a recommended answer, and only those the user alone can answer.
-4. The loop ends at acceptance. Nothing is written without it.
+4. A free-text answer that reframes an offered alternative, or that has a question mark, gets one question to make sure of the reading. Do this before the answer goes into the draft. An assumed reading of such an answer bakes a guess into accepted spec text.
+5. The loop ends at acceptance. Nothing is written without it.
 
 ## Writing it down
 
@@ -37,7 +38,7 @@ On acceptance, write to `~/repos/memory/<project>/specs/YYYY-MM-DD-<slug>.md`.
 - The file carries the accepted spec plus the decision log when one exists.
 - Offer to commit to the logbook repository. No commit without the user's go.
 
-Spec text the deliverer runs follows rule 5 too.
+Spec text the deliverer runs follows draft rule 5 too.
 
 ## Handoff
 
