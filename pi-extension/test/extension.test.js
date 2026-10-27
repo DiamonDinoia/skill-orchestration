@@ -1,6 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import managerExtension, { managerInstructions } from "../index.js";
+
+const SKILL_MD = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "skills",
+  "manager",
+  "SKILL.md"
+);
 
 function makePi() {
   const commands = {};
@@ -15,7 +27,12 @@ function makePi() {
 }
 
 test("loads instructions from the skill body", () => {
-  assert.match(managerInstructions(), /Context budget \(hard rules\)/);
+  const src = readFileSync(SKILL_MD, "utf8");
+  const fm = src.match(/^---\n[\s\S]*?\n---\n?/);
+  const expected = (fm ? src.slice(fm[0].length) : src).trim();
+  const actual = managerInstructions();
+  assert.equal(actual, expected);
+  assert.match(actual, /^# Manager$/m);
 });
 
 test("injects instructions only while active", async () => {
