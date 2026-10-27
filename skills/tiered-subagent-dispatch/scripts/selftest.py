@@ -9,9 +9,14 @@ BIN = Path.home() / ".local" / "bin"
 STAGE = Path(os.environ.get("HERMES_DISPATCH_BIN") or BIN)
 
 
+def tool_path(name):
+    # the copy next to this file is the release copy under test: a checkout run tests its own tree
+    here = Path(__file__).resolve().parent / name
+    return here if here.is_file() else (STAGE / name if (STAGE / name).is_file() else BIN / name)
+
+
 def load(name):
-    path = STAGE / name if (STAGE / name).is_file() else BIN / name
-    loader = importlib.machinery.SourceFileLoader(name.replace("-", "_"), str(path))
+    loader = importlib.machinery.SourceFileLoader(name.replace("-", "_"), str(tool_path(name)))
     mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
     loader.exec_module(mod)
     return mod
@@ -97,7 +102,8 @@ def check_effort_clamp():
     assert efforts_of(QWEN, "principal") == ["xhigh"] * 3             # principal high -> xhigh
     assert efforts_of(MIST, "intern") == ["high"] * 3                 # low -> high
     assert efforts_of(MIST, "principal") == ["high"] * 3              # principal high -> high
-    assert efforts_of("n/Unlisted", "junior") == ["medium"] * 3       # no entry: the tier value stays
+    jv = cfg["tiers"]["junior"]["reasoning_effort"]                    # the json value, not a live pin
+    assert efforts_of("n/Unlisted", "junior") == [jv] * 3              # no entry: the tier value stays
 
 
 def check_lanes():
@@ -1212,6 +1218,305 @@ def check_review():
     assert rc == 2, rc
 
 
+def _ledger_case():
+    """Fixture router for the ledger cases: three healthy models, the routes order leads with Mistral."""
+    r = load("hermes-dispatch-route")
+    r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9", "haiku": "claude-haiku-9", "sol": "x"}
+    r.inflight_counts = lambda: {}
+    qwen, mist, kimi = "Qwen/Qwen3.8-27B-FP8", "mistralai/Mistral-Medium-3.5-128B", "moonshotai/Kimi-K3"
+    cfg = {"rank": {qwen: 5, mist: 4, kimi: 3},
+           "routes": {"mechanical": [mist, qwen, kimi], "code": [mist, qwen, kimi]},
+           "tiers": {"senior": {"reasoning_effort": "high", "fallback": ["sonnet"]},
+                     "intern": {"reasoning_effort": "low", "prefer": "cheapest", "fallback": ["haiku", "sonnet"]}},
+           "features": {}}
+    r.routing = lambda: cfg
+    r.flatiron_status = lambda *a: {m: {"ok": True} for m in cfg["rank"]}
+    return r, qwen, mist, kimi
+
+
+def _ledger_row(i, model, verdict, kind="mechanical"):
+    return {"ts": i, "node": "n", "kind": kind, "tier": "senior", "model": model, "verdict": verdict, "note": ""}
+
+
+def check_ledger_qwen_first():
+    """An empty ledger: the Qwen preference decides the mechanical and the intern pick."""
+    r, qwen, mist, kimi = _ledger_case()
+    with tempfile.TemporaryDirectory() as d:
+        led = Path(d, "outcomes.jsonl")
+        os.environ["HERMES_DISPATCH_LEDGER"] = str(led)
+        led.write_text("")
+        assert r.pick("mechanical", "senior", [], False)["model"] == qwen      # routes lead with Mistral
+        assert r.pick("code", "intern", [], False)["model"] == qwen            # every intern pick, over prefer=cheapest
+        os.environ["HERMES_DISPATCH_LEDGER"] = str(Path(d, "missing.jsonl"))   # a missing file is an empty ledger
+        assert r.pick("mechanical", "senior", [], False)["model"] == qwen
+    os.environ.pop("HERMES_DISPATCH_LEDGER", None)
+
+
+def check_ledger_demotes():
+    """Three failed rows for a kind demote the model: the next lane takes the pick."""
+    r, qwen, mist, kimi = _ledger_case()
+    with tempfile.TemporaryDirectory() as d:
+        led = Path(d, "outcomes.jsonl")
+        os.environ["HERMES_DISPATCH_LEDGER"] = str(led)
+        rows = [_ledger_row(i, "QWEN/QWEN3.8-27B-FP8", v)                      # upper-case id pins the lowercase match
+                for i, v in enumerate(("failed-garbled-report", "hung", "fabricated-report"))]
+        led.write_text("".join(json.dumps(x) + "\n" for x in rows))
+        p = r.pick("mechanical", "senior", [], False)
+        assert p["model"] == mist, p
+        assert any(s.startswith(qwen) and s.endswith("ledger: last 3 mechanical runs failed")
+                   for s in p["skipped"]), p["skipped"]
+        assert [x["model"] for x in r.lanes("mechanical", "senior", [], [])] == [mist, kimi]   # lanes obeys the demotion
+    os.environ.pop("HERMES_DISPATCH_LEDGER", None)
+
+
+def check_ledger_mixed_verdicts():
+    """Two failures plus one clean run in the last 3 rows do not demote."""
+    r, qwen, mist, kimi = _ledger_case()
+    with tempfile.TemporaryDirectory() as d:
+        led = Path(d, "outcomes.jsonl")
+        os.environ["HERMES_DISPATCH_LEDGER"] = str(led)
+        rows = [_ledger_row(i, qwen, v) for i, v in enumerate(("failed-interrupted", "hung", "done-clean"))]
+        led.write_text("".join(json.dumps(x) + "\n" for x in rows))
+        p = r.pick("mechanical", "senior", [], False)
+        assert p["model"] == qwen, p
+        assert not any("ledger" in s for s in p["skipped"]), p["skipped"]
+    os.environ.pop("HERMES_DISPATCH_LEDGER", None)
+
+
+def check_ledger_bad_lines():
+    """A garbage line is skipped: it never crashes pick and never counts as history."""
+    r, qwen, mist, kimi = _ledger_case()
+    with tempfile.TemporaryDirectory() as d:
+        led = Path(d, "outcomes.jsonl")
+        os.environ["HERMES_DISPATCH_LEDGER"] = str(led)
+        bad = ["not json at all", "null", "", '{"kind": "mechanical", "model": "Qwen/Qwen3.8-27B-FP8"}',
+               '{"kind": "mechanical", "model": "x/y", "verdict": 5}']
+        lines = []
+        for i in range(3):
+            lines.append(json.dumps(_ledger_row(i, qwen, f"failed-{i}")) + "\n")
+            lines.append(bad[i] + "\n")
+        led.write_text("".join(lines))
+        p = r.pick("mechanical", "senior", [], False)
+        assert p["model"] == mist, p                                         # the 3 bad rows still demote Qwen
+        assert [x["model"] for x in r.lanes("mechanical", "senior", [], [])] == [mist, kimi], p
+    os.environ.pop("HERMES_DISPATCH_LEDGER", None)
+
+
+def check_ledger_all_skipped():
+    """Every candidate dead in the ledger: fall back to the unskipped order and say so in reason."""
+    r, qwen, mist, kimi = _ledger_case()
+    with tempfile.TemporaryDirectory() as d:
+        led = Path(d, "outcomes.jsonl")
+        os.environ["HERMES_DISPATCH_LEDGER"] = str(led)
+        rows = []
+        for m in (qwen, "mistralai/Mistral-Medium-3.5-128K", kimi):            # the -128K suffix pins the size normalization
+            for i in range(3):
+                rows.append(_ledger_row(len(rows), m, f"failed-{i}"))
+        led.write_text("".join(json.dumps(x) + "\n" for x in rows))
+        p = r.pick("mechanical", "senior", [], False)
+        assert p["model"] == qwen, p                                         # demotion is advisory when every candidate is dead
+        assert "ledger fallback" in p["reason"] and "unskipped order" in p["reason"], p
+        assert any("serving the unskipped order" in s for s in p["skipped"]), p["skipped"]
+    os.environ.pop("HERMES_DISPATCH_LEDGER", None)
+
+
+def check_qwen_first_not_principal():
+    """F1: the Qwen-first reorder never applies to a principal pick: the floors anchor keeps the lead."""
+    r, qwen, mist, kimi = _ledger_case()
+    with tempfile.TemporaryDirectory() as d:
+        os.environ["HERMES_DISPATCH_LEDGER"] = str(Path(d, "outcomes.jsonl"))   # missing file = empty ledger
+        cfg = r.routing()
+        cfg["tiers"]["principal"] = {"reasoning_effort": "high", "skills": [], "fallback": ["opus"]}
+        cfg["floors"] = {"mechanical": kimi, "code": kimi}
+        cfg["routes"] = {"mechanical": [kimi, mist, qwen], "code": [kimi, mist, qwen]}
+        assert r.pick("mechanical", "principal", [], False)["model"] == kimi, "anchor leads, never Qwen-first"
+        assert r.pick("code", "principal", [], False)["model"] == kimi, "control: code x principal"
+    os.environ.pop("HERMES_DISPATCH_LEDGER", None)
+
+
+def check_effort_at_most_high():
+    """F2: the user rule over the live value: every tier effort in the json is at most high, never max."""
+    r = load("hermes-dispatch-route")
+    jpath = STAGE / "flatiron-routing.json"                            # staged runs judge the staged json
+    cfg = json.loads((jpath if jpath.is_file() else r.ROUTING_FILE).read_text())
+    allowed = {"none", "minimal", "low", "medium", "high"}
+    bad = {t: c["reasoning_effort"] for t, c in cfg["tiers"].items() if c["reasoning_effort"] not in allowed}
+    assert not bad, bad
+
+
+def check_ledger_fallback_note_lanes_assign():
+    """F5: the all-dead fallback note reaches the lanes and assign output, not only pick."""
+    r, qwen, mist, kimi = _ledger_case()
+    with tempfile.TemporaryDirectory() as d:
+        led = Path(d, "outcomes.jsonl")
+        os.environ["HERMES_DISPATCH_LEDGER"] = str(led)
+        rows = []
+        for m in (qwen, mist, kimi):
+            for i in range(3):
+                rows.append(_ledger_row(len(rows), m, f"failed-{i}"))
+        led.write_text("".join(json.dumps(x) + "\n" for x in rows))
+        note = "ledger fallback: serving the unskipped order"
+        for x in r.lanes("mechanical", "senior", [], []):
+            assert note in x.get("reason", ""), x
+        a = r.assign([("n1", "mechanical", "senior", [])])[0]
+        assert note in a["reason"], a
+    os.environ.pop("HERMES_DISPATCH_LEDGER", None)
+
+
+def check_norm_model_size_suffix():
+    """F6: only a trailing -128b or -128k normalizes away: distinct size variants keep distinct keys."""
+    r = load("hermes-dispatch-route")
+    n = r._norm_model
+    assert n("MISTRALAI/MISTRAL-MEDIUM-3.5-128K") == n("mistralai/Mistral-Medium-3.5-128B")
+    assert n("Qwen/Qwen3.8-27B") != n("Qwen/Qwen3.8-32B"), "27B and 32B must not share one history key"
+    assert n("Qwen/Qwen3.8-27B-FP8") == "qwen/qwen3.8-27b-fp8", "a non-size suffix stays"
+
+
+def check_sync_pin_effort_clamp():
+    """D8: sync never writes a reasoning_effort the pinned model refuses. The fixture pins Mistral
+    (accepts none, high) for intern at tier effort low: the written tier must say high."""
+    r = load("hermes-dispatch-route")
+    with tempfile.TemporaryDirectory() as d:
+        r.SIDECAR_DIR = Path(d, "cache", "dispatch-route")
+        r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9",
+                                       "haiku": "claude-haiku-9", "sol": "x"}
+        mist = "mistralai/Mistral-Medium-3.5-128B"
+        cfg = {"rank": {mist: 1}, "routes": {"mechanical": [mist], "code": [mist]},
+               "efforts": {mist: ["none", "high"]}, "features": {},
+               "tiers": {"intern": {"reasoning_effort": "low", "prefer": "cheapest", "skills": [], "fallback": ["haiku"]},
+                         "senior": {"reasoning_effort": "high", "skills": [], "fallback": ["sonnet"]}}}
+        r.routing = lambda: cfg
+        r.flatiron_status = lambda *a: {mist: {"ok": True}}
+        r.load_cache = lambda: {"flatiron": {"listed": [mist]}}
+        r.sync_features = lambda *a: None
+        r.sync_rank = lambda *a: None
+        store = {}                                                     # fake hermes config, like check_sync_tier_models
+
+        def run(cmd, **kw):
+            if cmd[2] == "get":
+                if cmd[3] not in store:
+                    return types.SimpleNamespace(stdout="", stderr="Config key not set", returncode=1)
+                v = store[cmd[3]]
+                out = v if isinstance(v, str) else __import__("yaml").safe_dump(v, sort_keys=False)
+                return types.SimpleNamespace(stdout=out, stderr="", returncode=0)
+            store[cmd[3]] = json.loads(cmd[4]) if cmd[3] not in ("delegation.provider", "delegation.model") else cmd[4]
+            return types.SimpleNamespace(stdout="ok", stderr="", returncode=0)
+
+        r.subprocess = types.SimpleNamespace(run=run, TimeoutExpired=subprocess.TimeoutExpired,
+                                             CalledProcessError=subprocess.CalledProcessError)
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert r.sync(False) == 0
+        t = store["delegation.tiers"]
+        assert (t["intern"]["model"], t["intern"]["reasoning_effort"]) == (mist, "high"), t["intern"]
+
+
+QWEN, MIST, KIMI = "Qwen/Qwen3.8-27B-FP8", "mistralai/Mistral-Medium-3.5-128B", "moonshotai/Kimi-K3"
+# One fixture table for the CLI cases: flatiron trio, intern and senior tiers, generous capacity
+# so a real in-flight job on this machine never moves the pick.
+_CLI_TABLE = json.dumps({
+    "rank": {QWEN: 5, MIST: 4, KIMI: 3},
+    "routes": {"mechanical": [MIST, QWEN, KIMI], "code": [MIST, QWEN, KIMI]},
+    "capacity": {QWEN: 9, MIST: 9, KIMI: 9},
+    "tiers": {"intern": {"reasoning_effort": "low", "skills": [], "fallback": ["haiku", "sonnet"]},
+              "senior": {"reasoning_effort": "high", "skills": [], "fallback": ["sonnet"]}},
+    "features": {}})
+
+
+def _cli(args, routing=_CLI_TABLE, models=None, ledger=b""):
+    """Run the router CLI offline: the scratch HERMES_HOME cache is fresh, so no probe and no
+    model discovery reach the network. Returns the CompletedProcess for the caller to assert on."""
+    with tempfile.TemporaryDirectory() as d:
+        home = Path(d)
+        (home / "cache").mkdir()
+        (home / "cache" / "dispatch-route.json").write_text(json.dumps(
+            {"flatiron": {"at": time.time(), "models": models or {}, "listed": []},
+             "latest": {"at": time.time(), "opus": "fixture-opus", "sonnet": "fixture-sonnet",
+                        "haiku": "fixture-haiku", "sol": "x"}}))
+        rfile, led = home / "routing.json", home / "outcomes.jsonl"
+        rfile.write_text(routing)
+        led.write_bytes(ledger)
+        env = {**os.environ, "HERMES_HOME": d, "HERMES_DISPATCH_ROUTING_FILE": str(rfile),
+               "HERMES_DISPATCH_LEDGER": str(led)}
+        return subprocess.run([sys.executable, str(tool_path("hermes-dispatch-route")), *args],
+                              env=env, capture_output=True, text=True, timeout=60)
+
+
+def check_ledger_invalid_utf8():
+    """F1: one raw non-UTF-8 line must not kill the ledger reader. pick exits 0 and the rows
+    around the bad line still demote Qwen."""
+    rows = [json.dumps(_ledger_row(i, QWEN, v)).encode() for i, v in enumerate(("hung", "failed", "failed-check"))]
+    ledger = rows[0] + b"\n\xff\n" + rows[1] + b"\n" + rows[2] + b"\n"
+    p = _cli(["pick", "mechanical", "--tier", "intern"], models={m: {"ok": True} for m in (QWEN, MIST, KIMI)}, ledger=ledger)
+    assert p.returncode == 0, p.stderr[-300:]
+    out = json.loads(p.stdout)
+    assert out["model"] == MIST, out                      # Qwen demoted, rows after the bad line kept
+    assert any(s.startswith(QWEN) and s.endswith("ledger: last 3 mechanical runs failed")
+               for s in out["skipped"]), out["skipped"]
+
+
+def check_fallback_ledger_demotes():
+    """F2: the Claude fallback skips a rung whose own ledger record is dead, in pick, lanes and
+    assign. Every rung dead, a model still comes back."""
+    def rows(m):
+        return b"".join(json.dumps(_ledger_row(i, m, "failed-check", "code")).encode() + b"\n" for i in range(3))
+    dead_haiku = rows("fixture-haiku")                    # no flatiron health: straight to the fallback
+    p = _cli(["pick", "code", "--tier", "intern"], ledger=dead_haiku)
+    assert p.returncode == 0 and json.loads(p.stdout)["model"] == "fixture-sonnet", p.stdout
+    ln = _cli(["lanes", "code", "--tier", "intern"], ledger=dead_haiku)
+    assert [x["model"] for x in json.loads(ln.stdout)] == ["fixture-sonnet"], ln.stdout
+    a = _cli(["assign", "n1=code:intern"], ledger=dead_haiku)
+    assert [x["model"] for x in json.loads(a.stdout)] == ["fixture-sonnet"], a.stdout
+    p2 = _cli(["pick", "code", "--tier", "intern"], ledger=dead_haiku + rows("fixture-sonnet") + rows("fixture-opus"))
+    assert p2.returncode == 0 and json.loads(p2.stdout)["model"], p2.stdout   # never return nothing
+
+
+def check_fallback_missing_id():
+    """N1: a fallback family with no live id is skipped, never a claude_id exit. R2: a later
+    family with no id never takes the pick. R3: dead and id-less rungs skip, the clean one wins."""
+    r, qwen, mist, kimi = _ledger_case()
+    r.routing()["tiers"]["intern"]["fallback"] = ["haiku", "sonnet", "opus"]
+    r.flatiron_status = lambda *a: {}                                        # straight to the fallback ladder
+    with tempfile.TemporaryDirectory() as d:
+        led = Path(d, "outcomes.jsonl")
+        os.environ["HERMES_DISPATCH_LEDGER"] = str(led)
+        led.write_text("")                                                   # R2: clean ledger, sonnet has no id
+        r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "haiku": "claude-haiku-9", "sol": "x"}
+        assert r.pick("code", "intern", [], False)["model"] == "claude-haiku-9"
+        rows = [_ledger_row(i, "claude-haiku-9", "failed-check", "code") for i in range(3)]
+        led.write_text("".join(json.dumps(x) + "\n" for x in rows))          # R3: haiku dead, sonnet id-less
+        assert r.pick("code", "intern", [], False)["model"] == "claude-opus-9"
+    os.environ.pop("HERMES_DISPATCH_LEDGER", None)
+
+
+def check_fallback_dead_resolved():
+    """F5: an unresolved family never takes the fallback rung. Haiku has no id and Sonnet is
+    ledger-dead: the advisory fallback serves the resolved Sonnet in pick, lanes and assign,
+    code and vision alike. The old filter exited through claude_id on Haiku here."""
+    r, qwen, mist, kimi = _ledger_case()
+    r.flatiron_status = lambda *a: {}                                        # straight to the fallback ladder
+    r.resolve_latest = lambda *a: {"sonnet": "claude-sonnet-9", "opus": "claude-opus-9", "sol": "x"}
+    with tempfile.TemporaryDirectory() as d:
+        led = Path(d, "outcomes.jsonl")
+        os.environ["HERMES_DISPATCH_LEDGER"] = str(led)
+        for kind in ("code", "vision"):
+            rows = [_ledger_row(i, "claude-sonnet-9", "failed-check", kind) for i in range(3)]
+            led.write_text("".join(json.dumps(x) + "\n" for x in rows))      # three dead Sonnet rows
+            assert r.pick(kind, "intern", [], False)["model"] == "claude-sonnet-9"
+            assert [x["model"] for x in r.lanes(kind, "intern", [], [])] == ["claude-sonnet-9"]
+            assert [x["model"] for x in r.assign([("n1", kind, "intern", [])])] == ["claude-sonnet-9"]
+    os.environ.pop("HERMES_DISPATCH_LEDGER", None)
+
+
+def check_routing_null_list():
+    """F4: a routing file whose top level is null or a list takes the built-in table and its
+    warning instead of an AttributeError."""
+    for raw in ("null", "[]"):
+        p = _cli(["pick", "code"], routing=raw)
+        assert p.returncode == 0, (raw, p.stderr[-300:])
+        assert "built-in table" in p.stderr, (raw, p.stderr)
+        assert json.loads(p.stdout)["model"] == "fixture-sonnet", (raw, p.stdout)
+
+
 if __name__ == "__main__":
     check_route(); check_tiers(); check_effort_clamp(); check_lanes(); check_needs(); check_default_features()
     check_probe_fallback()
@@ -1220,4 +1525,11 @@ if __name__ == "__main__":
     check_principal_floor(); check_principal_anchor(); check_sync_rank_reasons(); check_sync_rank_routes(); check_vision_probe()
     check_assign(); check_assign_capacity(); check_assign_capacity_inflight()
     check_prefer_cheapest(); check_sync_tier_models(); check_inflight_scan(); check_review()
+    check_ledger_qwen_first(); check_ledger_demotes(); check_ledger_mixed_verdicts()
+    check_ledger_bad_lines(); check_ledger_all_skipped()
+    check_qwen_first_not_principal(); check_effort_at_most_high(); check_ledger_fallback_note_lanes_assign()
+    check_norm_model_size_suffix(); check_sync_pin_effort_clamp()
+    check_ledger_invalid_utf8(); check_fallback_ledger_demotes(); check_routing_null_list()
+    check_fallback_missing_id()
+    check_fallback_dead_resolved()
     print("selftest OK")

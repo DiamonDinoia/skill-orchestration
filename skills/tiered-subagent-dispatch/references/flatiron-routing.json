@@ -37,11 +37,12 @@
  "efforts": {
   "_doc": "the reasoning efforts each flatiron model accepts; source: the provider's own error text. A model with no entry takes the tier value unchanged; a rejected value becomes the nearest accepted value at or above it, else the highest accepted",
   "Qwen/Qwen3.8-27B-FP8": ["xhigh", "medium", "low"],
-  "mistralai/Mistral-Medium-3.5-128B": ["none", "high"]
+  "mistralai/Mistral-Medium-3.5-128B": ["none", "high"],
+  "moonshotai/Kimi-K3": ["low", "high", "max"]
  },
  "tiers": {
   "intern": {"reasoning_effort": "low", "prefer": "cheapest", "skills": [], "fallback": ["haiku", "sonnet"]},
-  "junior": {"reasoning_effort": "medium", "prefer": "cheapest", "skills": [], "fallback": ["haiku", "sonnet", "opus"]},
+  "junior": {"reasoning_effort": "high", "prefer": "cheapest", "skills": [], "fallback": ["haiku", "sonnet", "opus"]},
   "senior": {"reasoning_effort": "high", "skills": ["brainstorm"], "fallback": ["sonnet", "opus"]},
   "principal": {"reasoning_effort": "high", "skills": ["brainstorm", "team", "manager"], "fallback": ["opus"]}
  }

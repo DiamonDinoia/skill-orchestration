@@ -60,7 +60,7 @@ DEFAULT_ROUTING = {"rank": {}, "routes": {},
                    "features": {"haiku": {"vision": True, "web": True}, "sonnet": {"vision": True, "web": True},
                                 "opus": {"vision": True, "web": True}},
                    "tiers": {"intern":    {"reasoning_effort": "low",    "skills": [], "fallback": ["haiku", "sonnet"]},
-                             "junior":    {"reasoning_effort": "medium", "skills": [], "fallback": ["haiku", "sonnet", "opus"]},
+                             "junior":    {"reasoning_effort": "high",   "skills": [], "fallback": ["haiku", "sonnet", "opus"]},
                              "senior":    {"reasoning_effort": "high",   "skills": ["brainstorm"], "fallback": ["sonnet", "opus"]},
                              "principal": {"reasoning_effort": "high",   "skills": ["brainstorm", "team", "manager"], "fallback": ["opus"]}}}
 
@@ -68,7 +68,7 @@ DEFAULT_ROUTING = {"rank": {}, "routes": {},
 def routing():
     try:
         cfg = json.loads(ROUTING_FILE.read_text())
-        if isinstance(cfg.get("rank"), dict) and isinstance(cfg.get("routes"), dict):
+        if isinstance(cfg, dict) and isinstance(cfg.get("rank"), dict) and isinstance(cfg.get("routes"), dict):
             return cfg
         print(f"hermes-dispatch-route: {ROUTING_FILE} lacks rank/routes; using built-in table", file=sys.stderr)
     except OSError:
@@ -266,6 +266,43 @@ def _flatiron_flags(m, tcfg, cfg):
             + "".join(f" -s {s}" for s in tcfg.get("skills", [])))
 
 
+LEDGER_OVERRIDE = "HERMES_DISPATCH_LEDGER"
+
+
+def _norm_model(m):
+    """One spelling for a model across ledger and routes: lowercase, no -128b/-128k size suffix."""
+    return re.sub(r"-128[bk]$", "", m.lower())
+
+
+def _ledger_dead(kind):
+    """Models whose last 3 ledger rows for this kind all failed, keyed by normalized id. A
+    missing file or a bad line gives no entry: the ledger never crashes pick."""
+    try:
+        lines = Path(os.environ.get(LEDGER_OVERRIDE) or SIDECAR_DIR / "outcomes.jsonl").read_bytes().splitlines()
+    except OSError:
+        return {}
+    hist = {}
+    for line in lines:
+        try:
+            row = json.loads(line)
+            m, k, v = row["model"], row["kind"], row["verdict"]
+        except (ValueError, KeyError, TypeError):
+            continue  # a missing or bad line never crashes pick: skip the line
+        if k == kind and isinstance(m, str) and isinstance(v, str):
+            hist.setdefault(_norm_model(m), []).append(v)
+    bad = ("hung", "fabricated", "missed-defects", "failed")  # failure verdicts, hyphenated forms included
+    out = {}
+    for m, vs in hist.items():
+        last = vs[-3:]
+        out[m] = len(last) == 3 and all(v.startswith(bad) for v in last)
+    return out
+
+
+def _ledger_fb_note(skipped):
+    """The fallback disclosure pick, lanes and assign all print when the ledger fallback fired."""
+    return "; ledger fallback: serving the unskipped order" if any(s.startswith("ledger: every") for s in skipped) else ""
+
+
 def flatiron_lanes(kind, tier, failed, needs, cfg, health, skipped):
     """The flatiron models pick would serve, in pick order. Skip reasons append to `skipped` as the
     walk goes: pick stops at the first yield with its old output shape, lanes takes every yield."""
@@ -289,21 +326,37 @@ def flatiron_lanes(kind, tier, failed, needs, cfg, health, skipped):
         # routes order says (the ranker or a placement must not take the pick).
         anchor = (cfg.get("floors") or {}).get(kind)
         hinted = ([anchor] if anchor in hinted else []) + [m for m in hinted if m != anchor]
+    if (kind == "mechanical" or tier == "intern") and tier != "principal":
+        # user decision "2 yes is usuall qwen": mechanical work and every intern pick lead with the fastest Qwen lane
+        hinted = [m for m in hinted if m.lower().startswith("qwen/")] + [m for m in hinted if not m.lower().startswith("qwen/")]
     # Monotonic: once an Anthropic rung failed on quality, never drop back to flatiron.
     candidates = [] if claude_failed else hinted
-    for m in candidates:
-        if m in failed:
-            continue
-        if floor and rank.get(m, 0) <= floor:
-            skipped.append(f"{m}: not stronger than a failed model"); continue
-        if tier == "principal" and not (type(rank.get(m)) is int and rank[m] in top3):
-            skipped.append(f"{m}: no explicit rank among the top-3 principal values"); continue
-        if not health.get(m, {}).get("ok"):
-            skipped.append(f"{m}: unhealthy ({(health.get(m) or {}).get('error') or 'not listed'})"); continue
-        lacking = [n for n in needs if not (feats.get(m) or {}).get(n)]
-        if lacking:
-            skipped.append(f"{m}: lacks {', '.join(lacking)}"); continue
-        yield m
+    dead = _ledger_dead(kind)
+
+    def walk(use_ledger, skips):
+        for m in candidates:
+            if m in failed:
+                continue
+            if floor and rank.get(m, 0) <= floor:
+                skips.append(f"{m}: not stronger than a failed model"); continue
+            if tier == "principal" and not (type(rank.get(m)) is int and rank[m] in top3):
+                skips.append(f"{m}: no explicit rank among the top-3 principal values"); continue
+            if not health.get(m, {}).get("ok"):
+                skips.append(f"{m}: unhealthy ({(health.get(m) or {}).get('error') or 'not listed'})"); continue
+            lacking = [n for n in needs if not (feats.get(m) or {}).get(n)]
+            if lacking:
+                skips.append(f"{m}: lacks {', '.join(lacking)}"); continue
+            if use_ledger and dead.get(_norm_model(m)):
+                skips.append(f"{m}: ledger: last 3 {kind} runs failed"); continue
+            yield m
+
+    got = list(walk(True, skipped))
+    if not got:
+        # The demotion is advisory when it would drop every candidate: never return nothing.
+        got = list(walk(False, []))
+        if got:
+            skipped.append(f"ledger: every {kind} candidate failed its last 3 runs; serving the unskipped order")
+    yield from got
 
 
 def pick(kind, tier, failed, refresh, needs=None):
@@ -327,9 +380,10 @@ def pick(kind, tier, failed, refresh, needs=None):
     if m is None and full:  # all full: still a flatiron pick, never the ladder for capacity alone
         m = _overflow(full, counts, cfg)
     if m is not None:
+        led_fb = _ledger_fb_note(skipped)
         return {"provider": "flatiron", "model": m,
                 "flags": _flatiron_flags(m, tcfg, cfg),
-                "reason": f"best healthy flatiron model for {kind}" + (f" stronger than failed rank {floor}" if floor else ""),
+                "reason": f"best healthy flatiron model for {kind}" + (f" stronger than failed rank {floor}" if floor else "") + led_fb,
                 "skipped": skipped}
     # json entries win over the built-in Claude defaults; a missing key falls back to its default
     feats = {**DEFAULT_ROUTING["features"], **(cfg.get("features") or {})}
@@ -341,6 +395,12 @@ def pick(kind, tier, failed, refresh, needs=None):
     order = ["haiku", "sonnet", "opus"]
     top = max((order.index(f) for f in failed_fams), default=-1)
     fams = [f for f in fams if order.index(f) > top and all((feats.get(f) or {}).get(n) for n in needs)]
+    dead = _ledger_dead(kind)
+    # never call claude_id in the filter: a family with no live id must skip the rung, not exit
+    resolved = [f for f in fams if latest.get(f)]
+    live = [f for f in resolved if not dead.get(_norm_model(latest[f]))]
+    # a dead resolved rung may serve; fams last keeps the claude_id error when nothing resolved
+    fams = live or resolved or fams  # the demotion is advisory when it would drop every rung: never return nothing
     if fams:
         fam = fams[0]
         model = claude_id(latest, fam)
@@ -360,9 +420,13 @@ def lanes(kind, tier, failed, needs):
     returns, marked "fallback": true. The ladder exhausted: an empty list. Health: cached probe."""
     cfg, tcfg, needs = _pick_setup(kind, tier, needs)
     health = flatiron_status(False)
+    sk = []
     out = [{"provider": "flatiron", "model": m, "flags": _flatiron_flags(m, tcfg, cfg),
             "rank": cfg["rank"].get(m)}
-           for m in flatiron_lanes(kind, tier, failed, needs, cfg, health, [])]
+           for m in flatiron_lanes(kind, tier, failed, needs, cfg, health, sk)]
+    note = f"best healthy flatiron model for {kind}" + _ledger_fb_note(sk)
+    for x in out:
+        x["reason"] = note
     if out:
         return out
     fb = pick(kind, tier, failed, False, needs)
@@ -443,7 +507,8 @@ def assign(specs):
     for node, kind, tier, needs in specs:
         cfg, tcfg, needs = _pick_setup(kind, tier, needs)
         health = flatiron_status(False)
-        el = list(flatiron_lanes(kind, tier, [], needs, cfg, health, []))
+        sk = []
+        el = list(flatiron_lanes(kind, tier, [], needs, cfg, health, sk))
         if el:
             free = [x for x in el if counts.get(x, 0) < _capacity(cfg, x)]
             if free:
@@ -452,6 +517,7 @@ def assign(specs):
             else:
                 m = _overflow(el, counts, cfg)
                 reason = f"every eligible model at capacity; most capacity left of {len(el)} for {kind}"
+            reason += _ledger_fb_note(sk)
             load = counts.get(m, 0)
             counts[m] = load + 1
             out.append({"node": node, "kind": kind, "tier": tier, "provider": "flatiron", "model": m,
@@ -962,7 +1028,7 @@ def sync(refresh):
         if (tiers_cfg.get(t) or {}).get("prefer") == "cheapest":
             m = next(flatiron_lanes(kind, t, [], [], cfg_now, health, []), None)
             if m:
-                tiers_yaml[t] = {"reasoning_effort": tiers_yaml[t]["reasoning_effort"], "model": m, "provider": "flatiron",
+                tiers_yaml[t] = {"reasoning_effort": _effort(m, tiers_yaml[t]["reasoning_effort"], cfg_now), "model": m, "provider": "flatiron",
                                  "skills": tiers_yaml[t]["skills"], "fallback": tiers_yaml[t]["fallback"]}
     want = {"delegation.fallback_providers": json.dumps(chain), "delegation.tiers": json.dumps(tiers_yaml),
             "delegation.provider": prov, "delegation.model": model}  # provider+model: written last
