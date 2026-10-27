@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Schedule subagent dispatch. GRAPH: {"nodes": {"ID": {"deps": [], "files": [], "resources": [], "state": "todo"}}}.
+"""Schedule subagent dispatch. GRAPH: {"nodes": {"ID": {"deps": [], "files": [], "resources": [], "state": "todo", "tier": "junior"}}}.
+Tiers: intern < junior < senior < principal; every node needs one. escalate retries a failed node one tier up.
 States: todo, running, done, failed. Every command first rejects a graph that `check` rejects.
 Exit 0 ok, 1 invalid graph or refused move, 2 usage or filesystem. Stdlib only, python3 >= 3.9."""
 
@@ -12,9 +13,10 @@ import tempfile
 import time
 from graphlib import CycleError, TopologicalSorter
 
-USAGE = "usage: dag.py check|show GRAPH | dag.py ready GRAPH [--max N] | dag.py start|done|fail|retry GRAPH ID..."
+USAGE = "usage: dag.py check GRAPH | show GRAPH [--slots N] | dag.py ready GRAPH [--max N] | dag.py start|done|fail|retry GRAPH ID... | dag.py escalate GRAPH ID"
 MOVES = {"start": ("todo", "running"), "done": ("running", "done"), "fail": ("running", "failed")}
 STATES = {"todo", "running", "done", "failed"}
+TIERS = ("intern", "junior", "senior", "principal")
 
 def dependents(nodes, ids):
     """Every node whose output depends on one of `ids`; reads deps only, not states."""
@@ -26,8 +28,9 @@ def dependents(nodes, ids):
     return seen
 
 def problems(nodes):
-    """Unknown deps, a path outside the repo, a cycle, or a file that two unordered nodes write."""
-    out = [f"unknown dep: {i} -> {d}" for i, n in nodes.items() for d in n["deps"] if d not in nodes]
+    """Missing or bad tier, unknown deps, a path outside the repo, a cycle, or a file that two unordered nodes write."""
+    out = [f"node {i}: tier must be one of {' '.join(TIERS)}" for i, n in nodes.items() if n.get("tier") not in TIERS]
+    out += [f"unknown dep: {i} -> {d}" for i, n in nodes.items() for d in n["deps"] if d not in nodes]
     out += [f"path not repo-relative: {i} {f}" for i, n in nodes.items() for f in n["files"]
             if os.path.isabs(f) or os.path.normpath(f).split(os.sep)[0] == ".."]
     if out:
@@ -65,8 +68,24 @@ def move(nodes, cmd, ids):
     """Apply cmd to every id, or to none; return (error list, note) or (None, note)."""
     if len(set(ids)) != len(ids):  # one tracked run per id
         return [f"duplicate id in {cmd}: {' '.join(sorted({i for i in ids if ids.count(i) > 1}))}"], ""
+    if cmd == "escalate":
+        i = ids[0]
+        if i not in nodes:
+            return [f"unknown node {i}"], ""
+        if nodes[i]["state"] != "failed":
+            return [f"cannot escalate {i}: state is not failed"], ""
+        if nodes[i]["tier"] == "principal":
+            return [f"cannot escalate {i}: already principal; the failure goes to the parent manager"], ""
+        errs, _ = move(nodes, "retry", ids)
+        if errs:
+            return errs, ""
+        old = nodes[i]["tier"]
+        nodes[i]["tier"] = new = TIERS[TIERS.index(old) + 1]
+        return None, f"{i}: {old} -> {new}"
     if cmd == "retry":
-        bad = [i for i in ids if i not in nodes or nodes[i]["state"] not in ("failed", "done")]
+        if any(i not in nodes for i in ids):
+            return [f"unknown node {' '.join(i for i in ids if i not in nodes)}"], ""
+        bad = [i for i in ids if nodes[i]["state"] not in ("failed", "done")]
         if bad:
             return [f"cannot retry {' '.join(bad)}: state is not failed or done"], ""
         reset = dependents(nodes, ids)
@@ -112,8 +131,8 @@ def selftest():
     me = os.path.abspath(__file__)
     with tempfile.TemporaryDirectory(prefix="dag-selftest-") as tmp:
         graph = os.path.join(tmp, "graph.json")
-        nodes = normalize
-        files = lambda pairs: normalize({i: {"files": f} for i, f in pairs.items()})
+        nodes = lambda d: normalize({i: {"tier": "junior", **n} for i, n in d.items()})  # a graph without a tier fails check
+        files = lambda pairs: nodes({i: {"files": f} for i, f in pairs.items()})
         write = lambda g, p=graph: json.dump({"nodes": g}, open(p, "w", encoding="utf-8"))
         run = lambda *a, p=graph: subprocess.run([sys.executable, me, a[0], p, *a[1:]],
                                                  capture_output=True, text=True)
@@ -148,19 +167,19 @@ def selftest():
         err, _ = move(mixed, "retry", ["a"])
         ok(err and "b" in err[0] and mixed["a"]["state"] == "done", "retry refuses a running dependent")
         ok(move(g(a=[]), "retry", ["zzz"])[0], "retry an unknown id")
-        for g2, args, frag in [({"a": {"deps": ["b"]}, "b": {}}, ("start", "a"), "not ready"),
-                               ({"a": {"resources": ["db"]}, "b": {"resources": ["db"]}}, ("start", "a", "b"), "not ready"),
-                               ({"a": {}, "b": {"deps": ["a"], "state": "running"}}, ("check",), "b is running, but a is todo"),
+        for g2, args, frag in [({"a": {"deps": ["b"], "tier": "junior"}, "b": {"tier": "junior"}}, ("start", "a"), "not ready"),
+                               ({"a": {"resources": ["db"], "tier": "junior"}, "b": {"resources": ["db"], "tier": "junior"}}, ("start", "a", "b"), "not ready"),
+                               ({"a": {"tier": "junior"}, "b": {"deps": ["a"], "state": "running", "tier": "junior"}}, ("check",), "b is running, but a is todo"),
                                ({"a": {"state": "weird"}}, ("check",), "bad state"),
                                ({"a": {"deps": [1]}}, ("check",), "strings"),
-                               ({"a": {"files": ["/x"]}}, ("check",), "not repo-relative: a /x"),
-                               ({"a": {}}, ("start", "a", "a"), "duplicate id")]:
+                               ({"a": {"files": ["/x"], "tier": "junior"}}, ("check",), "not repo-relative: a /x"),
+                               ({"a": {"tier": "junior"}}, ("start", "a", "a"), "duplicate id")]:
             write(g2)
             before = open(graph, "rb").read()
             res = run(*args)
             ok(res.returncode == 1 and frag in res.stderr and res.stderr.count("\n") == 1
                and open(graph, "rb").read() == before, frag)
-        write({"a": {}})
+        write({"a": {"tier": "junior"}})
         lockfd = os.open(graph + ".lock", os.O_CREAT | os.O_RDWR)
         fcntl.flock(lockfd, fcntl.LOCK_EX)  # this process holds the lock; a writer must block
         proc = subprocess.Popen([sys.executable, me, "start", graph, "a"],
@@ -180,7 +199,7 @@ def selftest():
         rodir = os.path.join(tmp, "ro")
         rograph = os.path.join(rodir, "graph.json")
         os.mkdir(rodir)
-        write({"a": {}}, rograph)
+        write({"a": {"tier": "junior"}}, rograph)
         os.chmod(rodir, 0o555)
         if not os.access(rodir, os.W_OK):  # root bypasses the mode; the test is meaningless then
             try:
@@ -189,6 +208,37 @@ def selftest():
                    and os.listdir(rodir) == ["graph.json"], "read-only dir: exit 2, one message, no temp file")
             finally:
                 os.chmod(rodir, 0o755)
+        for g3, args, frag in [({"a": {}}, ("check",), "tier must be one of intern junior senior principal"),
+                               ({"a": {"tier": "chief"}}, ("check",), "tier must be one of intern junior senior principal"),
+                               ({"a": {"state": "failed", "tier": "principal"}}, ("escalate", "a"), "already principal"),
+                               ({"a": {"state": "todo", "tier": "junior"}}, ("escalate", "a"), "state is not failed")]:
+            write(g3)
+            before = open(graph, "rb").read()
+            res = run(*args)
+            ok(res.returncode == 1 and frag in res.stderr and "a" in res.stderr
+               and open(graph, "rb").read() == before, frag)
+        write({"a": {"state": "failed", "tier": "junior"}, "b": {"deps": ["a"], "state": "failed", "tier": "junior"}})
+        res = run("escalate", "a")
+        got = json.load(open(graph, encoding="utf-8"))["nodes"]
+        ok(res.returncode == 0 and res.stdout == "a: junior -> senior\n" and got["a"]["tier"] == "senior"
+           and got["a"]["state"] == "todo" and got["b"]["state"] == "todo", "escalate bumps the tier and retries")
+        write({"a": {"tier": "junior"}, "b": {"deps": ["a"], "tier": "junior"}})
+        plain = run("show")
+        idle = run("show", "--slots", "2")
+        ok(plain.returncode == 0 and idle.stdout.splitlines() == plain.stdout.splitlines()
+           + ["IDLE: 1 ready for 2 free slots; split todo nodes"], "show --slots adds the IDLE line")
+        ok(run("show", "--slots", "1").stdout == plain.stdout and run("show").stdout == plain.stdout,
+           "show --slots satisfied stays quiet; no flag keeps the old output")
+        for args in (("show", "--slots", "\u00b2"), ("ready", "--max", "\u00b2")):
+            res = run(*args)
+            ok(res.returncode == 2 and res.stderr == USAGE + "\n", f"{args[1]} non-ASCII digits: usage exit 2")
+        ok("check|show" not in USAGE and "show GRAPH [--slots N]" in USAGE, "usage shows --slots on show only")
+        write({"a": {"state": "failed", "tier": "junior"}})
+        for args in (("escalate", "zzz"), ("retry", "zzz")):
+            before = open(graph, "rb").read()
+            res = run(*args)
+            ok(res.returncode == 1 and res.stderr == "unknown node zzz\n"
+               and open(graph, "rb").read() == before, f"{args[0]} an unknown id")
     print("selftest: PASS")
     return 0
 
@@ -196,11 +246,17 @@ def main(argv):
     cmd, path, rest = (argv + ["", ""])[1], (argv + ["", ""])[2], argv[3:]
     if cmd == "selftest" and not path:
         return selftest()
-    limit = None
-    if cmd == "ready" and len(rest) == 2 and rest[0] == "--max" and rest[1].isdigit():
-        limit, rest = int(rest[1]), []
-    if not path or cmd not in ("check", "ready", "show", *MOVES, "retry") \
-            or bool(rest) != (cmd in MOVES or cmd == "retry"):
+    limit = slots = None
+    if len(rest) == 2 and (cmd, rest[0]) in (("ready", "--max"), ("show", "--slots")) \
+            and rest[1].isascii() and rest[1].isdigit():  # ASCII only: int() rejects the unicode digits isdigit() accepts
+        if cmd == "ready":
+            limit = int(rest[1])
+        else:
+            slots = int(rest[1])
+        rest = []
+    writes = cmd in MOVES or cmd in ("retry", "escalate")
+    if not path or cmd not in ("check", "ready", "show", *MOVES, "retry", "escalate") \
+            or bool(rest) != writes or (cmd == "escalate" and len(rest) != 1):
         print(USAGE, file=sys.stderr)
         return 2
     try:
@@ -217,12 +273,12 @@ def main(argv):
                 print(f"cannot read graph {path}: {err}", file=sys.stderr)
                 return 2
             errs, note = problems(nodes), ""
-            if not errs and (cmd in MOVES or cmd == "retry"):
+            if not errs and writes:
                 errs, note = move(nodes, cmd, rest)
             if errs:
                 print("\n".join(errs), file=sys.stderr)
                 return 1
-            if cmd in MOVES or cmd == "retry":
+            if writes:
                 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
                 try:
                     with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -230,7 +286,11 @@ def main(argv):
                     os.replace(tmp, path)  # a crash never leaves half a graph
                 finally:  # remove the temp on every failure path
                     os.path.exists(tmp) and os.unlink(tmp)
-            print(note or "\n".join(ready(nodes, limit) if cmd == "ready" else show(nodes) if cmd == "show" else ["ok"]))
+            out = ready(nodes, limit) if cmd == "ready" else show(nodes) if cmd == "show" else ["ok"]
+            if cmd == "show" and slots is not None and len(ready(nodes)) < slots \
+                    and any(n["state"] == "todo" for n in nodes.values()):
+                out.append(f"IDLE: {len(ready(nodes))} ready for {slots} free slots; split todo nodes")
+            print(note or "\n".join(out))
     except OSError as err:
         print(f"dag.py: {err}", file=sys.stderr)
         return 2
