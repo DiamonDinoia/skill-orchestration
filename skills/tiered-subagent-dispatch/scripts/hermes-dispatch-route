@@ -1,0 +1,1066 @@
+#!/usr/bin/env python3
+"""Model routing for the Hermes manager / tiered-subagent-dispatch workflow (Hermes only).
+
+  hermes-dispatch-route status [--refresh]           flatiron health + resolved latest Claude/OpenAI ids
+  hermes-dispatch-route pick KIND [--tier T] [--failed MODEL ...] [--needs F[,F...]] [--refresh]
+                                                     -> JSON {provider, model, reason, flags}
+  hermes-dispatch-route lanes KIND [--tier T] [--needs F[,F...]] [--failed M[,...]]
+                                                     -> JSON line: every eligible flatiron lane, one
+                                                        "{fallback: true}" entry when none fits
+  hermes-dispatch-route assign NODE=KIND:TIER[:NEED,NEED] ...
+                                                     -> JSON list, one entry per node: the eligible
+                                                        flatiron model with the fewest in-flight jobs
+                                                        under its capacity (ties in pick order), so one
+                                                        batch spreads out; all full, the most capacity left
+  hermes-dispatch-route latest opus|sonnet|sol|haiku -> bare model id
+  hermes-dispatch-route models [--refresh]           every gateway model: health, rank hint, kinds, new
+  hermes-dispatch-route sync [--refresh]             write discovered ids into Hermes config
+
+KIND: code | frontend | debug | prose | mechanical | research | vision   (see ROUTES; vision needs image input)
+TIER: intern | junior | senior | principal (principal takes only a listed model with an explicit int rank in the top 3 rank values; its pick leads with the kind's floors anchor)
+
+Escalation rule (user's standing order): pick the best HEALTHY flatiron model listed for the task kind.
+When a model fails, the next pick is a flatiron model STRICTLY STRONGER (higher RANK) than every
+failed one that is healthy; if none exists, the next Claude rung of the tier's fallback list in
+ROUTING_FILE (intern: Haiku, Sonnet; junior: Haiku, Sonnet, Opus; senior: Sonnet, Opus; principal: Opus).
+A failed Claude rung is never retried and the walk never steps down. Capabilities / model are in the
+ROUTING_FILE "features" map: features[model] = {vision, web, probed}; --needs F requires every
+named feature true (a model with no entry has no features; `pick vision` means `--needs vision`).
+The Claude rungs read features[haiku|sonnet|opus] through the same filter (built-in defaults when the json lacks the key).
+Flags: --reasoning EFFORT only on a flatiron pick, clamped to the efforts the model accepts (efforts map in ROUTING_FILE); -s SKILL per tier skill on every pick.
+Ranks, per-kind preferences, per-model capacity and tiers live in ROUTING_FILE (JSON) so they can be tuned without editing code.
+capacity[model] is the parallel job count (default 1); a full model is skipped while another has room.
+The old key principal_min_rank is removed and ignored: principal is the top 3 rank values of the
+listed models, and a model the gateway lists no more drops out of the rank map after 7 days.
+"""
+import argparse, base64, concurrent.futures as cf, contextlib, datetime, fcntl, glob, hashlib, json, os, random, re, struct, subprocess, sys, tempfile, time, urllib.request, zlib
+from pathlib import Path
+
+HERMES_HOME = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+CACHE = HERMES_HOME / "cache" / "dispatch-route.json"
+# The selftest gate validates a candidate routing file through this explicit override.
+ROUTING_OVERRIDE = "HERMES_DISPATCH_ROUTING_FILE"
+ROUTING_FILE = Path(os.environ.get(ROUTING_OVERRIDE) or
+                    HERMES_HOME / "skills" / "autonomous-ai-agents" / "tiered-subagent-dispatch" / "references" / "flatiron-routing.json")
+# Backups, lock and reject state stay outside the skill dir so tracked content stays clean.
+SIDECAR_DIR = HERMES_HOME / "cache" / "dispatch-route"
+BASE = "https://inference.flatironinstitute.org/v1"
+CLAUDE = "claude-subscription-directsdk-experimental"
+# Flatiron hosts drop out and come back: health is re-probed on (nearly) every dispatch.
+# 60 s only dedupes the probes of one dispatch batch.
+FLATIRON_TTL, CLAUDE_TTL, PROBE_TIMEOUT = 60, 6 * 3600, 25
+# A features entry this old gets a fresh vision probe on the next sync; a failed re-probe keeps
+# the old entry. web is never re-probed: False on flatiron by provider rule, True for Claude/sol.
+VISION_REPROBE_DAYS = 7
+# No model ids in code: the gateway's /models listing says what exists; ROUTING_FILE holds the
+# manager's hints (rank, per-kind order). A routed kind missing from `routes` errors; an empty
+# routes list serves no flatiron model; vision takes any healthy vision model.
+# Claude feature entries are keyed by fallback family (haiku/sonnet/opus), like the live json.
+DEFAULT_ROUTING = {"rank": {}, "routes": {},
+                   "features": {"haiku": {"vision": True, "web": True}, "sonnet": {"vision": True, "web": True},
+                                "opus": {"vision": True, "web": True}},
+                   "tiers": {"intern":    {"reasoning_effort": "low",    "skills": [], "fallback": ["haiku", "sonnet"]},
+                             "junior":    {"reasoning_effort": "medium", "skills": [], "fallback": ["haiku", "sonnet", "opus"]},
+                             "senior":    {"reasoning_effort": "high",   "skills": ["brainstorm"], "fallback": ["sonnet", "opus"]},
+                             "principal": {"reasoning_effort": "high",   "skills": ["brainstorm", "team", "manager"], "fallback": ["opus"]}}}
+
+
+def routing():
+    try:
+        cfg = json.loads(ROUTING_FILE.read_text())
+        if isinstance(cfg.get("rank"), dict) and isinstance(cfg.get("routes"), dict):
+            return cfg
+        print(f"hermes-dispatch-route: {ROUTING_FILE} lacks rank/routes; using built-in table", file=sys.stderr)
+    except OSError:
+        pass
+    except ValueError as e:
+        print(f"hermes-dispatch-route: {ROUTING_FILE} is invalid JSON ({e}); using built-in table", file=sys.stderr)
+    return DEFAULT_ROUTING
+
+
+def load_cache():
+    try:
+        return json.loads(CACHE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+@contextlib.contextmanager
+def _cache_lock():
+    CACHE.parent.mkdir(parents=True, exist_ok=True)
+    with open(CACHE.with_suffix(".lock"), "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        yield
+
+
+def save_section(key, value):
+    """Locked read-merge-write of one cache section; unique temp file, atomic replace."""
+    with _cache_lock():
+        c = load_cache()
+        c[key] = value
+        fd, tmp = tempfile.mkstemp(dir=CACHE.parent, prefix=".dispatch-route-")
+        with os.fdopen(fd, "w") as fh:
+            json.dump(c, fh, indent=1)
+        os.replace(tmp, CACHE)
+
+
+def flatiron_key():
+    m = re.search(r'key_env:\s*"([^"]+)"', (HERMES_HOME / "config.yaml").read_text(), re.S)
+    env_name = (m.group(1) if m else "FLATIRON_GW_API_KEY")
+    key = os.environ.get(env_name)
+    if not key:
+        # cron has no login env: read the live value from ~/.profile, do not export it
+        m = re.search(env_name + r'="?\$\(cat\s+"\$HOME/([^")]+)"\)',
+                      (Path.home() / ".profile").read_text(errors="replace"))
+        if m:
+            try:
+                key = (Path.home() / m.group(1)).read_text().strip()
+            except OSError:
+                pass
+        if not key:
+            try:
+                for line in (HERMES_HOME / ".env").read_text().splitlines():
+                    m = re.match(r"\s*(?:export\s+)?" + env_name + r"\s*=\s*['\"]?([^'\"\s]+)", line)
+                    if m:
+                        key = m.group(1)
+            except OSError:
+                pass
+    return key or ""
+
+
+def _req(path, body=None, timeout=60):
+    headers = {"Authorization": f"Bearer {flatiron_key()}", "Content-Type": "application/json"}
+    data = json.dumps(body).encode() if body is not None else None
+    with urllib.request.urlopen(urllib.request.Request(BASE + path, data=data, headers=headers), timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def probe_one(model):
+    t = time.time()
+    try:
+        out = _req("/chat/completions", {"model": model, "max_tokens": 8,
+                                         "messages": [{"role": "user", "content": "Reply: ok"}]}, timeout=PROBE_TIMEOUT)
+        ok = bool(out.get("choices"))
+        return model, {"ok": ok, "latency_s": round(time.time() - t, 1), "error": None if ok else "no choices"}
+    except Exception as e:  # HTTP 5xx, timeout, refused
+        msg = getattr(e, "read", lambda: b"")()
+        msg = (msg.decode(errors="replace") if msg else str(e))[:160]
+        return model, {"ok": False, "latency_s": round(time.time() - t, 1), "error": msg}
+
+
+def flatiron_status(refresh=False):
+    c = load_cache()
+    f = c.get("flatiron")
+    if f and not refresh and time.time() - f.get("at", 0) < FLATIRON_TTL:
+        return f["models"]
+    try:
+        listed = [m["id"] for m in _req("/models", timeout=15).get("data", [])]
+    except Exception:
+        listed = []
+    # The list failed: probe the ranked models directly, their chat call is the real health signal.
+    models = {}
+    targets = listed or list(routing()["rank"])
+    if targets:
+        with cf.ThreadPoolExecutor(len(targets)) as ex:
+            models = dict(ex.map(probe_one, targets))
+    save_section("flatiron", {"at": time.time(), "models": models, "listed": listed})
+    return models
+
+
+def _hermes_python():
+    cands = sorted(glob.glob(str(HERMES_HOME / "tools" / "python-3*" / "bin" / "python3")))
+    return cands[-1] if cands else sys.executable
+
+
+def _vkey(v):
+    return tuple(int(x) for x in re.findall(r"\d+", v))
+
+
+def resolve_latest(refresh=False):
+    """Latest opus/sonnet/haiku from the Claude account picker, latest *-sol from Hermes' codex catalog."""
+    c = load_cache()
+    r = c.get("latest")
+    if r and not refresh and time.time() - r.get("at", 0) < CLAUDE_TTL and "haiku" in r:  # a cache written before haiku existed lacks the key
+        return r
+    plugin = HERMES_HOME / "plugins" / CLAUDE
+    code = (
+        "import sys,json,os\n"
+        f"os.environ.setdefault('HERMES_HOME',{str(HERMES_HOME)!r})\n"
+        f"sys.path.insert(0,{str(HERMES_HOME / 'hermes-agent')!r})\n"
+        "import hermes_bootstrap\n"  # puts Hermes' managed site-packages (ruamel etc.) on sys.path
+        f"sys.path.append({str(plugin)!r})\n"
+        "out={}\n"
+        "try:\n import directsdk_setup as s; out['claude']=[m['id'] for m in (s.discover_models() or [])]\n"
+        "except Exception as e: out['claude_err']=str(e)[:200]\n"
+        "try:\n"
+        " from hermes_cli.codex_models import get_codex_model_ids\n"
+        " from hermes_cli.auth import resolve_codex_runtime_credentials\n"
+        " cr=resolve_codex_runtime_credentials(read_only=True)\n"  # live account catalog, not the static list
+        " out['codex']=get_codex_model_ids(cr.get('api_key'), cr.get('base_url'))\n"
+        "except Exception as e: out['codex_err']=str(e)[:200]\n"
+        "print(json.dumps(out))\n")
+    try:
+        env = {k: v for k, v in os.environ.items() if k not in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV")}
+        p = subprocess.run([_hermes_python(), "-I", "-c", code], cwd=str(HERMES_HOME), env=env,
+                           capture_output=True, text=True, timeout=90)
+        found = json.loads(p.stdout.strip().splitlines()[-1])
+    except Exception:
+        found = {}
+
+    def best(ids, pat):
+        hits = [i for i in ids if re.fullmatch(pat, i.removesuffix("[1m]"))]
+        return max(hits, key=lambda i: _vkey(i.removesuffix("[1m]"))) if hits else None
+
+    # No literal model ids: discovered now, else last discovered value, else a hard error.
+    prev = r or {}
+    r = {"at": time.time(),
+         "opus": best(found.get("claude", []), r"claude-opus-\d+(-\d+)?(-\d{8})?") or prev.get("opus"),
+         "sonnet": best(found.get("claude", []), r"claude-sonnet-\d+(-\d+)?(-\d{8})?") or prev.get("sonnet"),
+         "haiku": best(found.get("claude", []), r"claude-haiku-\d+(-\d+)?(-\d{8})?") or prev.get("haiku"),
+         "sol": best(found.get("codex", []), r"gpt-\d+(\.\d+)?-sol") or prev.get("sol")}
+    missing = [k for k in ("opus", "sonnet", "sol") if not r[k]]  # haiku is checked where used (claude_id)
+    if missing:
+        sys.exit(f"hermes-dispatch-route: could not discover latest {', '.join(missing)} "
+                 f"(claude: {found.get('claude_err', 'ok')}, codex: {found.get('codex_err', 'ok')}); "
+                 "check `claude` login and `hermes auth` for openai-codex")
+    save_section("latest", r)
+    return r
+
+
+def claude_id(latest, fam):
+    """Resolved id of a Claude family, an error when the live lookup found none (no hardcoded ids)."""
+    if not latest.get(fam):
+        sys.exit(f"hermes-dispatch-route: no live id for Claude family {fam!r}; check `claude` login")
+    return latest[fam]
+
+
+def _pick_setup(kind, tier, needs):
+    """pick and lanes share one setup: validated kind and tier, needs plus vision for a vision kind."""
+    cfg = routing()
+    needs = sorted(set(needs or ()) | ({"vision"} if kind == "vision" else set()))
+    tiers = cfg.get("tiers") or DEFAULT_ROUTING["tiers"]
+    if tier not in tiers:
+        sys.exit(f"unknown tier {tier!r}; choose from {', '.join(tiers)}")
+    if cfg["routes"] and kind not in cfg["routes"] and kind != "vision":
+        sys.exit(f"unknown kind {kind!r}; choose from {', '.join(cfg['routes'])}, vision")
+    return cfg, tiers[tier], needs
+
+
+_EFFORT_SCALE = ("none", "low", "medium", "high", "xhigh", "max")   # the flatiron reasoning scale
+
+
+def _effort(m, effort, cfg):
+    """The --reasoning value for flatiron model m. The efforts map lists what each model accepts;
+    its source is the provider's own error text. No entry or an accepted value: the tier value
+    stays. A rejected value becomes the nearest accepted value at or above it, else the highest."""
+    acc = (cfg.get("efforts") or {}).get(m)
+    if not acc or effort in acc:
+        return effort
+    above = [e for e in _EFFORT_SCALE[_EFFORT_SCALE.index(effort):] if e in acc]
+    return above[0] if above else max(acc, key=_EFFORT_SCALE.index)
+
+
+def _flatiron_flags(m, tcfg, cfg):
+    """The flags pick emits for flatiron model m: the clamped reasoning effort and skills."""
+    return (f"--provider flatiron -m {m} --reasoning {_effort(m, tcfg['reasoning_effort'], cfg)}"
+            + "".join(f" -s {s}" for s in tcfg.get("skills", [])))
+
+
+def flatiron_lanes(kind, tier, failed, needs, cfg, health, skipped):
+    """The flatiron models pick would serve, in pick order. Skip reasons append to `skipped` as the
+    walk goes: pick stops at the first yield with its old output shape, lanes takes every yield."""
+    rank = cfg["rank"]
+    feats = cfg.get("features") or {}
+    failed = set(failed or [])
+    claude_failed = {m for m in failed if "/" not in m}  # flatiron ids are org/model, Claude ids are bare
+    floor = max((rank.get(m, 0) for m in failed if m in rank), default=0)
+    # the spec's principal = top 3 listed: the 3 highest rank VALUES of the models the gateway lists
+    # now (listed, healthy or not), so a retired model holds no slot; principal_min_rank is ignored
+    top3 = set(sorted({v for m, v in rank.items() if type(v) is int and m in health}, reverse=True)[:3])
+    # shortcut: a hand-edited non-int rank raises TypeError in pick and tied values widen principal past 3, sync_rank always writes 1..N, upgrade if the table is ever edited by hand
+    hinted = ([m for m in by_rank(list(health), rank) if (feats.get(m) or {}).get("vision")]
+              if kind == "vision" else [m for m in cfg["routes"].get(kind, []) if m in health])
+    if (cfg.get("tiers") or {}).get(tier, {}).get("prefer") == "cheapest":
+        # lowest rank value first, so the monotonic floor below escalates to the cheapest stronger model;
+        # shortcut: an unranked model sorts last (unknown strength is never "cheap"), upgrade if ranks gain a cost field
+        hinted = sorted(hinted, key=lambda m: rank.get(m, float("inf")))
+    if tier == "principal":
+        # The floors anchor is the escalation model: it leads the principal pick, whatever the
+        # routes order says (the ranker or a placement must not take the pick).
+        anchor = (cfg.get("floors") or {}).get(kind)
+        hinted = ([anchor] if anchor in hinted else []) + [m for m in hinted if m != anchor]
+    # Monotonic: once an Anthropic rung failed on quality, never drop back to flatiron.
+    candidates = [] if claude_failed else hinted
+    for m in candidates:
+        if m in failed:
+            continue
+        if floor and rank.get(m, 0) <= floor:
+            skipped.append(f"{m}: not stronger than a failed model"); continue
+        if tier == "principal" and not (type(rank.get(m)) is int and rank[m] in top3):
+            skipped.append(f"{m}: no explicit rank among the top-3 principal values"); continue
+        if not health.get(m, {}).get("ok"):
+            skipped.append(f"{m}: unhealthy ({(health.get(m) or {}).get('error') or 'not listed'})"); continue
+        lacking = [n for n in needs if not (feats.get(m) or {}).get(n)]
+        if lacking:
+            skipped.append(f"{m}: lacks {', '.join(lacking)}"); continue
+        yield m
+
+
+def pick(kind, tier, failed, refresh, needs=None):
+    cfg, tcfg, needs = _pick_setup(kind, tier, needs)
+    health = flatiron_status(refresh)
+    latest = resolve_latest()
+    failed = set(failed or [])
+    failed_fams = {fam for fam in ("haiku", "sonnet", "opus")
+                   if any(fam in m for m in failed if "/" not in m)}
+    floor = max((cfg["rank"].get(m, 0) for m in failed if m in cfg["rank"]), default=0)
+    skipped = []
+    skill_flags = "".join(f" -s {s}" for s in tcfg.get("skills", []))
+    counts = inflight_counts()
+    full, m = [], None
+    for cand in flatiron_lanes(kind, tier, failed, needs, cfg, health, skipped):
+        if counts.get(cand, 0) < _capacity(cfg, cand):
+            m = cand  # first eligible model with free capacity, pick order
+            break
+        skipped.append(f"{cand}: at capacity")
+        full.append(cand)
+    if m is None and full:  # all full: still a flatiron pick, never the ladder for capacity alone
+        m = _overflow(full, counts, cfg)
+    if m is not None:
+        return {"provider": "flatiron", "model": m,
+                "flags": _flatiron_flags(m, tcfg, cfg),
+                "reason": f"best healthy flatiron model for {kind}" + (f" stronger than failed rank {floor}" if floor else ""),
+                "skipped": skipped}
+    # json entries win over the built-in Claude defaults; a missing key falls back to its default
+    feats = {**DEFAULT_ROUTING["features"], **(cfg.get("features") or {})}
+    # Vision puts Haiku (reads images) first, except for principal, which never gets Haiku.
+    fams = tcfg["fallback"]
+    if kind == "vision" and tier != "principal":
+        fams = ["haiku"] + [f for f in fams if f != "haiku"]
+    # Monotonic: resume after the highest failed rung, never step back down.
+    order = ["haiku", "sonnet", "opus"]
+    top = max((order.index(f) for f in failed_fams), default=-1)
+    fams = [f for f in fams if order.index(f) > top and all((feats.get(f) or {}).get(n) for n in needs)]
+    if fams:
+        fam = fams[0]
+        model = claude_id(latest, fam)
+        return {"provider": CLAUDE, "model": model,
+                "flags": f"--provider {CLAUDE} -m {model}{skill_flags}",
+                "reason": f"no suitable healthy flatiron model; tier {tier} fallback rung: latest {fam.capitalize()}",
+                "skipped": skipped}
+    return {"provider": None, "model": None, "flags": None,
+            "reason": f"tier {tier} ladder exhausted" + (
+                f" ({', '.join(sorted(failed_fams))} failed)" if failed_fams else "") + ": escalate to the user",
+            "skipped": skipped}
+
+
+def lanes(kind, tier, failed, needs):
+    """Every flatiron lane pick would serve for this batch, one entry per model in pick order,
+    each with the flags its lane job runs. No model fits: one entry, the fallback rung pick
+    returns, marked "fallback": true. The ladder exhausted: an empty list. Health: cached probe."""
+    cfg, tcfg, needs = _pick_setup(kind, tier, needs)
+    health = flatiron_status(False)
+    out = [{"provider": "flatiron", "model": m, "flags": _flatiron_flags(m, tcfg, cfg),
+            "rank": cfg["rank"].get(m)}
+           for m in flatiron_lanes(kind, tier, failed, needs, cfg, health, [])]
+    if out:
+        return out
+    fb = pick(kind, tier, failed, False, needs)
+    return [dict(fb, fallback=True)] if fb["provider"] else []
+
+
+def by_rank(models, rank):
+    """Strongest first; unranked models keep gateway listing order after the ranked ones."""
+    return sorted(models, key=lambda m: -rank.get(m, 0))
+
+
+def _job_model(argv):
+    """The flatiron model of one `hermes chat` argv, or None. One job counts once, on the hermes
+    process itself: argv[0] basename hermes, or python running the hermes entry point (a script
+    path named hermes, or the -c entry code carrying hermes_cli). A wrapper (nice, ionice, taskset,
+    systemd-run, bash -c) keeps argv with the same tokens but fails these rules, so it never
+    adds a second count for the job underneath it."""
+    base = os.path.basename(argv[0]) if argv else ""
+    rest = argv[1:]
+    if base == "hermes":
+        pass
+    elif base.startswith("python"):
+        # shortcut: a python launch with flags before a script path is not counted, upgrade if such launches appear
+        if not (rest and (os.path.basename(rest[0]) == "hermes" or any("hermes_cli" in t for t in rest))):
+            return None
+    else:
+        return None
+    if "chat" not in rest:
+        return None
+    provider = model = None
+    # shortcut: an option value shaped like a flag (-q "--model=x") is scanned as a flag, upgrade when the scan tracks option arity
+    for i, t in enumerate(rest):
+        if t == "--provider" and i + 1 < len(rest):
+            provider = rest[i + 1]
+        elif t.startswith("--provider="):
+            provider = t.split("=", 1)[1]
+        elif t in ("-m", "--model") and i + 1 < len(rest):
+            model = rest[i + 1]
+        elif t.startswith("--model="):
+            model = t.split("=", 1)[1]
+    return model if provider == "flatiron" and model else None
+
+
+def inflight_counts():
+    """In-flight `hermes chat` flatiron jobs per model: a live /proc cmdline scan, no state file."""
+    counts = {}
+    for p in glob.glob("/proc/[0-9]*/cmdline"):
+        try:
+            argv = [a.decode("utf-8", "replace") for a in Path(p).read_bytes().split(b"\0") if a]
+        except OSError:
+            continue  # the process exited mid-scan
+        m = _job_model(argv)
+        if m:
+            counts[m] = counts.get(m, 0) + 1
+    return counts
+
+
+def _capacity(cfg, m):
+    """Parallel jobs one flatiron model takes: the ROUTING_FILE capacity map, default 1."""
+    return (cfg.get("capacity") or {}).get(m, 1)
+
+
+def _overflow(el, counts, cfg):
+    """Every eligible model at capacity: the most capacity left counting overflow, ties to the
+    higher-capacity model first (the user rule: the multi-instance model takes several jobs)."""
+    return max(el, key=lambda m: (_capacity(cfg, m) - counts.get(m, 0), _capacity(cfg, m)))
+
+
+def assign(specs):
+    """Load-balanced batch pick: every node takes its eligible model with the fewest in-flight
+    jobs under its capacity (ties in pick order) and raises that model's running count before the
+    next node, so one batch spreads over the eligible set. A model at capacity is skipped. Every
+    eligible model full: the node takes the most capacity left counting overflow (the
+    multi-instance model first), never the fallback ladder. A node with no eligible model gets the
+    fallback rung."""
+    counts = inflight_counts()
+    out = []
+    for node, kind, tier, needs in specs:
+        cfg, tcfg, needs = _pick_setup(kind, tier, needs)
+        health = flatiron_status(False)
+        el = list(flatiron_lanes(kind, tier, [], needs, cfg, health, []))
+        if el:
+            free = [x for x in el if counts.get(x, 0) < _capacity(cfg, x)]
+            if free:
+                m = min(free, key=lambda x: counts.get(x, 0))  # ties go to pick order because min is stable
+                reason = f"least in-flight of {len(el)} eligible flatiron model{'' if len(el) == 1 else 's'} for {kind}"
+            else:
+                m = _overflow(el, counts, cfg)
+                reason = f"every eligible model at capacity; most capacity left of {len(el)} for {kind}"
+            load = counts.get(m, 0)
+            counts[m] = load + 1
+            out.append({"node": node, "kind": kind, "tier": tier, "provider": "flatiron", "model": m,
+                        "flags": _flatiron_flags(m, tcfg, cfg), "load": load,
+                        "reason": reason,
+                        "fallback": False})
+        else:
+            fb = pick(kind, tier, [], False, needs)
+            out.append({"node": node, "kind": kind, "tier": tier, "provider": fb["provider"],
+                        "model": fb["model"], "flags": fb["flags"], "load": 0,
+                        "reason": fb["reason"], "fallback": True})
+    return out
+
+
+def models_report(refresh):
+    """What the manager chooses from: every gateway model with health, features and the current hints."""
+    cfg = routing()
+    feats = cfg.get("features") or {}
+    health = flatiron_status(refresh)
+    out = {}
+    for m in by_rank(list(health), cfg["rank"]):
+        f = feats.get(m) or {}
+        out[m] = dict(health[m], rank=cfg["rank"].get(m),
+                      kinds=[k for k, v in cfg["routes"].items() if m in v],
+                      new=m not in cfg["rank"],  # listed by the gateway but not yet ranked by the manager
+                      vision=f.get("vision"), web=f.get("web"))
+    return out
+
+
+def _write_file_atomic(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    finally:  # a failed write or replace leaves no temp file behind
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+
+
+def dumps_routing(cfg):
+    """Json in the baseline table style: one row per key, lists and leaf dicts inline. The
+    json.dumps grid churned every unchanged row and hid real changes in review (F15)."""
+    def emit(obj, lvl):
+        if isinstance(obj, dict) and lvl <= 1:
+            if not obj:
+                return "{}"
+            pad = " " * (lvl + 1)
+            rows = ",\n".join(f"{pad}{json.dumps(k)}: {emit(v, lvl + 1)}" for k, v in obj.items())
+            return "{\n" + rows + "\n" + " " * lvl + "}"
+        return json.dumps(obj)
+    return emit(cfg, 0)
+
+
+def write_routing(cfg):
+    # shortcut: the formatter reflows rows and can churn unchanged routes and tier rows, upgrade when a review needs byte-clean rows
+    _write_file_atomic(ROUTING_FILE, dumps_routing(cfg) + "\n")
+
+
+@contextlib.contextmanager
+def _routing_lock():
+    SIDECAR_DIR.mkdir(parents=True, exist_ok=True)
+    with open(SIDECAR_DIR / (ROUTING_FILE.name + ".lock"), "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        yield
+
+
+def _sha256(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@contextlib.contextmanager
+def _config_lock():
+    """One sync at a time: the hermes config reads, writes and rollback share this transaction."""
+    SIDECAR_DIR.mkdir(parents=True, exist_ok=True)
+    with open(SIDECAR_DIR / "config-write.lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        yield
+
+
+_VOCAB = {"red": (255, 0, 0), "green": (0, 255, 0), "blue": (0, 0, 255),
+          "yellow": (255, 255, 0), "black": (0, 0, 0), "white": (255, 255, 255)}
+_QUADS = ("top left", "top right", "bottom left", "bottom right")
+
+
+def _grid_png_b64(cols):
+    """16x16 2x2 grid PNG of four quadrant colours as RGB triples; stdlib only, no asset file."""
+    def chunk(tag, data):
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
+    raw = b"".join(b"\x00" + b"".join(bytes(cols[(y >= 8) * 2 + (x // 8)]) for x in range(16))
+                   for y in range(16))
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 16, 16, 8, 2, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+    return base64.b64encode(png).decode()
+
+
+def _probe_images():
+    """Two random grids, two quadrant questions each: the four answers are never all equal,
+    so no constant guesser can pass 4 of 4."""
+    out, seen_png = [], []
+    for _ in range(2):
+        keys = list(_VOCAB)
+        random.shuffle(keys)
+        png = _grid_png_b64([_VOCAB[k] for k in keys[:4]])   # 4 distinct colours per grid
+        while png in seen_png:
+            random.shuffle(keys)
+            png = _grid_png_b64([_VOCAB[k] for k in keys[:4]])
+        seen_png.append(png)
+        for q in random.sample(range(4), 2):                 # 2 quadrants of this grid
+            out.append((png, keys[q], _QUADS[q]))
+    random.shuffle(out)
+    return out
+
+
+def _vision_question(model, png, want, quad):
+    """True: the reply names the wanted colour word; False: one clear wrong colour word; None: any
+    other reply, including a refusal that names a colour. An HTTP error raises to the same end."""
+    out = _req("/chat/completions", {"model": model, "max_tokens": 4096,  # reasoning models need headroom
+                                     "messages": [{"role": "user", "content": [
+                                         {"type": "text", "text": f"What colour is the {quad} square? One word."},
+                                         {"type": "image_url", "image_url": {"url": "data:image/png;base64," + png}}]}]},
+               timeout=60)
+    ch = (out.get("choices") or [{}])[0]
+    if str(ch.get("finish_reason")) == "length":  # the budget went to reasoning, no answer arrived
+        return None
+    content = ch.get("message", {}).get("content") or ""
+    if isinstance(content, list):  # some gateways split content into parts
+        content = " ".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
+    t = re.sub(r"[\s.!?,;:'\"]+$", "", str(content).strip())  # trim whitespace and trailing punctuation
+    m = re.match(r"([A-Za-z]+)(?=$|[.!?,;:])", t)  # one colour word first, then only end or punctuation
+    return None if not m or m.group(1).lower() not in _VOCAB else m.group(1).lower() == want
+
+
+def _vision_probe(model):
+    """True: four answers right of four. False: two or more clear wrong answers with no
+    inconclusive reply. None: anything else, keep the old entry and retry next sync."""
+    verdicts = []
+    for png, want, quad in _probe_images():
+        try:
+            verdicts.append(_vision_question(model, png, want, quad))
+        except Exception:  # host fell over mid-probe: none of this run counts
+            return None
+    if verdicts == [True] * 4:
+        return True
+    return False if None not in verdicts and verdicts.count(False) >= 2 else None
+
+
+
+def probe_features(model):
+    """Probe one flatiron model for vision; web stays False on flatiron by provider rule (no web
+    search API, so a probe would measure nothing). None: inconclusive, retry next sync."""
+    try:
+        vision = _vision_probe(model)
+    except Exception:  # host fell over between the health probe and here: no entry, never false
+        return None
+    if vision is None:  # inconclusive: keep the old entry (or no entry) and retry next sync
+        return None
+    return {"vision": bool(vision), "probed": datetime.date.today().isoformat()}
+
+
+def _needs_reprobe(entry):
+    """Stale features entry: vision probe older than VISION_REPROBE_DAYS (or an unreadable date)."""
+    try:
+        return (datetime.date.today() - datetime.date.fromisoformat(str((entry or {}).get("probed", "")))).days > VISION_REPROBE_DAYS
+    except ValueError:
+        return True
+
+
+def sync_features(health, listed):
+    """D3: probe listed healthy models with no entry; re-probe stale entries in parallel.
+    A failed, timed-out or inconclusive probe writes no entry and never writes false; a re-probe
+    failure keeps the old entry. web = False for every flatiron model by provider rule and is
+    never probed here."""
+    if routing() is DEFAULT_ROUTING:
+        return
+    with _routing_lock():
+        before = _sha256(ROUTING_FILE)   # abort the publish if anything edits the json mid-run
+        cfg = routing()
+        feats = dict(cfg.get("features") or {})
+        ok = {m for m, h in health.items() if h.get("ok")}
+        todo = [(m, False) for m in listed if m in ok and m not in feats]
+        todo += [(m, True) for m in listed if m in ok and m in feats and _needs_reprobe(feats[m])]
+        if not todo:  # nothing new or stale: sync must not slow down
+            return
+        with cf.ThreadPoolExecutor(min(4, len(todo))) as ex:
+            got = dict(zip(todo, ex.map(lambda t: probe_features(t[0]), todo)))
+        changed = False
+        for (m, reprobe), f in got.items():
+            if f is None:
+                print(f"features: {m} probe failed; " + ("old entry kept" if reprobe else "no entry") + "; retry next sync")
+                continue
+            entry = dict(feats.get(m) or {})
+            entry.update({"vision": f["vision"], "web": False, "probed": f["probed"]})  # flatiron: web=False
+            feats[m] = entry
+            changed = True
+            print(f"features: {m} vision={entry['vision']} web=False probed={entry['probed']}" + (" (re-probe)" if reprobe else ""))
+        if changed:
+            if _sha256(ROUTING_FILE) != before:  # never republish a stale read over a live edit
+                print("routing json changed during sync, not published")
+                return
+            cfg["features"] = feats
+            write_routing(cfg)
+
+
+def _run_ranker(provider, model, rank, listed, timeout=600):
+    """One hermes chat ranker call; returns the parsed reply ({order, reasons} or a bare order) or None (logged)."""
+    exc = HERMES_HOME / "cache" / "scratch" / "rank-research" / "excerpts.md"
+    prompt = (
+        "Rank these flatiron gateway models by coding and agentic benchmark strength. "
+        f"Current rank map (higher = stronger): {json.dumps(rank)}. "
+        f"The gateway currently lists: {json.dumps(listed)}. "
+        + (f"Benchmark excerpts live in {exc}; read that file. " if exc.is_file() else "")
+        + "Use web_search for benchmark numbers the excerpts do not cover. "
+        "Reply with ONLY a JSON object {\"order\": {...}, \"reasons\": {...}} where order maps every "
+        "model id from the rank map and the listing to its integer rank: 1 = weakest, N = strongest, "
+        "each rank 1..N used exactly once, and reasons maps each model id to one short line why.")
+    try:
+        p = subprocess.run([str(Path.home() / ".local" / "bin" / "hermes"), "chat",
+                            "--provider", provider, "-m", model, "-q", prompt, "-Q"],
+                           capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print(f"rank: ranker {model} timed out; retry next sync")
+        return None
+    if p.returncode != 0:
+        print(f"rank: ranker {model} exited {p.returncode}; retry next sync")
+        return None
+    out = p.stdout.strip()
+    try:
+        return json.loads(out[out.index("{"):out.rindex("}") + 1])
+    except ValueError:
+        print(f"rank: ranker reply is not a JSON object: {out[:200]!r}")
+        return None
+
+
+def _selftest_ok(candidate):
+    """Gate for a candidate routing file: the installed routing selftest must pass with it."""
+    st = ROUTING_FILE.parent.parent / "scripts" / "selftest.py"
+    if not st.is_file():
+        return False
+    try:
+        return subprocess.run([sys.executable, str(st)], capture_output=True, text=True, timeout=120,
+                              env={**os.environ, ROUTING_OVERRIDE: str(candidate)}).returncode == 0
+    except (subprocess.TimeoutExpired, OSError):  # fail closed: the candidate gets dropped
+        return False
+
+
+def _publish_rank(cfg):
+    """F1: write the candidate to a scratch file, gate it, and only then one atomic replace of
+    the live json. No reader ever sees an unvalidated order. Same dir: the replace stays atomic."""
+    fd, tmp = tempfile.mkstemp(dir=ROUTING_FILE.parent, prefix=ROUTING_FILE.name + ".candidate")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(dumps_routing(cfg) + "\n")
+    try:
+        if _selftest_ok(Path(tmp)):
+            os.replace(tmp, ROUTING_FILE)
+            return True
+        return False
+    finally:  # a reject or a gate crash leaves no candidate behind
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+
+
+def _drop_retired(cfg, listed):
+    """F2: a ranked model the gateway lists no more drops out of the rank map after 7 days and
+    heals when re-listed. The last-listed dates live in a sidecar under SIDECAR_DIR. Returns the
+    dropped model ids."""
+    today = datetime.date.today()
+    side = SIDECAR_DIR / (ROUTING_FILE.name + ".last-listed")
+    try:
+        seen = json.loads(side.read_text())
+        if not isinstance(seen, dict):
+            seen = {}
+    except (OSError, ValueError):
+        seen = {}
+    keep, dropped = {}, []
+    for m in list(cfg["rank"]) + list(listed):
+        if m in keep:
+            continue
+        if m in listed:
+            keep[m] = today.isoformat()
+        else:
+            keep[m] = seen.get(m) or today.isoformat()  # no record: the clock starts at first notice
+    for m in list(cfg["rank"]):
+        if m in listed:
+            continue
+        try:
+            days = (today - datetime.date.fromisoformat(str(keep[m]))).days
+        except ValueError:
+            days = 0
+        if days >= 7:
+            dropped.append(m)
+            # the sidecar keeps the date until the gated publish lands: a rejected drop retries on the same clock
+            del cfg["rank"][m]
+            for lst in (cfg.get("routes") or {}).values():
+                if m in lst:
+                    lst[:] = [x for x in lst if x != m]
+            print(f"rank: dropped {m}: not listed for {days} days")
+    if keep != seen:
+        _write_file_atomic(side, json.dumps(keep, indent=1))
+    return dropped
+
+
+def _san(s):
+    """One untrusted fragment to one safe log line: utf-8 replace, no control chars, max 200 chars."""
+    return re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", str(s).encode("utf-8", "replace").decode("utf-8"))[:200]
+
+
+def _count_reject(att, state, why):
+    """One ranker run without an accepted order: bad reply, timeout or failed selftest gate.
+    All three burn the same 3-run budget; the write happens under sync_rank's routing lock."""
+    att["attempts"] = att.get("attempts", 0) + 1
+    _write_file_atomic(state, json.dumps(att))
+    retry = "retry next sync" if att["attempts"] < 3 else "no retry until the unranked set changes"
+    print(f"rank: {_san(why)}; attempt {att['attempts']}/3, {retry}")
+
+
+FLOORED = ("code", "debug", "research", "frontend")
+
+
+def _place_routes(cfg, health):
+    """After an accepted order a ranked healthy model in no routes list enters every kind whose
+    floor it clears, at its rank position. floors (json) maps kind to anchor model id: the cut is
+    "at least as strong as the anchor" in the new ranks, so renumbering cannot open it. A
+    FLOORED kind with no floors entry fails closed and takes no new model. prose and mechanical
+    stay floor-free. A kind whose anchor ranks no more takes no new model until the manager
+    retargets the key. Existing members keep their order; the newcomer lands after the last
+    stronger member."""
+    routes, rank = cfg.get("routes") or {}, cfg["rank"]
+    floors = cfg.get("floors") or {}
+    warned = set()
+    # shortcut: a model in any routes list is never a placement candidate for another kind, upgrade when one kind must adopt a listed model
+    listed_any = {m for lst in routes.values() for m in lst}
+    for m in sorted((m for m in rank if m not in listed_any and (health.get(m) or {}).get("ok")),
+                    key=lambda x: -rank[x]):
+        for kind, lst in routes.items():
+            if kind in FLOORED:
+                anchor = floors.get(kind)
+                if not anchor:
+                    if kind not in warned:
+                        warned.add(kind)
+                        print(f"routes: floors has no entry for {kind}; {kind} takes no new model")
+                    continue
+                if anchor not in rank:
+                    if kind not in warned:
+                        warned.add(kind)
+                        print(f"routes: floor anchor {anchor} ranks no more; {kind} takes no new model")
+                    continue
+                if rank[m] < rank[anchor]:
+                    continue
+            at = 0
+            for i, cur in enumerate(lst):
+                if rank.get(cur, 0) > rank[m]:
+                    at = i + 1
+            lst.insert(at, m)
+            print(f"routes: {kind} takes {m}")
+
+
+def _place_no_rank(cfg, health, before, dropped):
+    """A sync with no accepted order can still place. Placement is local and free, so a model that
+    turns healthy must not wait for an unrelated ranker run. This keeps the crash handling of the
+    accepted path. One publish covers the drop and the placement, on change only."""
+    routes0 = {k: list(v) for k, v in (cfg.get("routes") or {}).items()}
+    try:
+        _place_routes(cfg, health)
+    except Exception as e:
+        # a placement crash is not a ranker reject: no budget burn, the routes stay untouched
+        cfg["routes"] = routes0
+        print(f"routes: {type(e).__name__} in _place_routes, routes unchanged: {_san(e)}")
+    if not (dropped or cfg.get("routes") != routes0):
+        return
+    if _sha256(ROUTING_FILE) != before:
+        print("routing json changed during sync, not published")
+    elif not _publish_rank(cfg):
+        print("rank: drop of retired ranks or new placement failed the selftest gate; retry next sync")
+
+
+def sync_rank(latest, health, listed):
+    """D4: a listed model with no rank triggers one ranker run; only a gated order is written (F1),
+    and a ranked model the gateway lists no more drops out after 7 days (F2)."""
+    if routing() is DEFAULT_ROUTING:
+        return
+    with _routing_lock():
+        before = _sha256(ROUTING_FILE)   # abort the publish if anything edits the json mid-run
+        cfg = routing()
+        rank, feats = cfg["rank"], cfg.get("features") or {}
+        dropped = _drop_retired(cfg, listed)   # mutates cfg["rank"]; the map heals as models go
+        unranked = sorted(m for m in listed if m not in rank)
+        if not unranked:
+            _place_no_rank(cfg, health, before, dropped)
+            return
+        # 3 rejected ranker runs on one unranked set buy nothing on repeat: no more paid calls
+        # until the set changes. The budget lives in a small state file next to the json.
+        state = SIDECAR_DIR / (ROUTING_FILE.name + ".ranker-rejects")
+        try:
+            att = json.loads(state.read_text())
+        except OSError:
+            att = {}
+        except ValueError:
+            att = {}
+            print("ranker-rejects: malformed, reset")
+        if not isinstance(att, dict):
+            print("ranker-rejects: malformed, reset")
+            att = {"models": unranked, "attempts": 0}
+        elif att.get("models") != unranked:
+            att = {"models": unranked, "attempts": 0}
+        elif type(att.get("attempts", 0)) is not int or att.get("attempts", 0) < 0:
+            print("ranker-rejects: malformed, reset")   # a bad attempts value: no crash, no free paid runs
+            att = {"models": unranked, "attempts": 0}
+        if att.get("attempts", 0) >= 3:
+            print(f"rank: 3 rejected ranker runs already for {unranked}; no retry until the unranked set changes")
+            _place_no_rank(cfg, health, before, dropped)
+            return
+        prov, rmodel = None, None  # strongest healthy flatiron model with web true, else the Claude rungs
+        cands = [m for m in rank if health.get(m, {}).get("ok") and (feats.get(m) or {}).get("web")]
+        if cands:
+            prov, rmodel = "flatiron", max(cands, key=lambda m: rank[m])
+        else:
+            for fam in ("opus", "sonnet", "haiku"):
+                if latest.get(fam):
+                    prov, rmodel = CLAUDE, latest[fam]
+                    break
+        if not rmodel:
+            print("rank: no ranker available (no healthy web-capable model); retry next sync")
+            _place_no_rank(cfg, health, before, False)   # placement only: this path never published a bare drop
+            return
+        # After the ranker call each outcome is one accepted order or one counted attempt. The live
+        # json is written only through _publish_rank, so a bad run leaves it untouched. No exception
+        # escapes sync_rank.
+        try:
+            reply = _run_ranker(prov, rmodel, rank, listed)
+            if reply is None:
+                _count_reject(att, state, f"no usable order from {rmodel} (timeout, error exit or non-JSON reply)")
+                _place_no_rank(cfg, health, before, dropped)
+                return
+            order = reply.get("order", reply) if isinstance(reply, dict) else reply
+            reasons = (reply.get("reasons") or {}) if isinstance(reply, dict) else {}
+            want = set(rank) | set(listed)
+            got = order.keys() if isinstance(order, dict) else ()
+            # every value must be a rank int: True counts as 1 and "1" raises TypeError on sorted()
+            if (not isinstance(order, dict) or got != want
+                    or not all(type(v) is int for v in order.values())
+                    or sorted(order.values()) != list(range(1, len(want) + 1))):
+                _count_reject(att, state,
+                              f"rejected order from {rmodel}: missing={sorted(want - set(got))} extra={sorted(set(got) - want)}")
+                _place_no_rank(cfg, health, before, dropped)
+                return
+            if isinstance(reasons, dict) and reasons:  # untrusted: validate the order first, log sanitized
+                for m, line in reasons.items():
+                    print(f"rank: {_san(m)}: {_san(line)}")
+            else:
+                print("rank: no reasons")
+            if _sha256(ROUTING_FILE) != before:  # the ranker ran on a stale read: no write, no budget burn
+                print("routing json changed during sync, not published")
+                _place_no_rank(cfg, health, before, dropped)
+                return
+            stamp = time.strftime("%Y-%m-%d")
+            backup = SIDECAR_DIR / (ROUTING_FILE.name + "." + stamp)
+            if backup.exists():
+                backup = SIDECAR_DIR / (ROUTING_FILE.name + "." + time.strftime("%Y-%m-%d-%H%M%S"))
+            backup.write_text(ROUTING_FILE.read_text())  # the backup is the undo proof
+            cfg["rank"] = order
+            routes0 = {k: list(v) for k, v in (cfg.get("routes") or {}).items()}  # undo copy
+            try:
+                _place_routes(cfg, health)   # only an accepted run places new and returning models
+            except Exception as e:
+                # a placement crash is not a ranker reject: no budget burn, the accepted ranks still publish
+                cfg["routes"] = routes0
+                print(f"routes: {type(e).__name__} in _place_routes, routes unchanged: {_san(e)}")
+            if _publish_rank(cfg):
+                best = sorted(order.items(), key=lambda kv: -kv[1])
+                print("rank: accepted order from " + rmodel + ": " + ", ".join(f"{m}={r}" for m, r in best))
+                with contextlib.suppress(OSError):
+                    state.unlink()  # an accepted order resets the reject budget
+            else:
+                _count_reject(att, state, f"selftest failed on the new order; {ROUTING_FILE.name} unchanged")
+        except Exception as e:
+            # the live json needs no restore: only _publish_rank writes it, one atomic replace
+            # shortcut: a disk-full or closed-stdout error in this call still escapes sync_rank, upgrade if sync runs anywhere with a full disk
+            _count_reject(att, state, f"{type(e).__name__} in sync_rank after the ranker call: {_san(e)}")
+            _place_no_rank(cfg, health, before, dropped)
+
+
+def sync(refresh):
+    """Point Hermes config at discovered models; writes only on change, only delegation.* keys.
+    delegate_task = best healthy flatiron model (stays flatiron/Kimi-K3 if all are down); fallback =
+    latest Haiku, latest Sonnet, latest Opus; delegation.tiers = the ROUTING_FILE tier table with live ids.
+    Also probes new models' features (D3) and ranks unranked listed models (D4) before the config write."""
+    latest = resolve_latest(refresh)
+    health = flatiron_status(True)  # always re-probe: gateway models come and go
+    listed = (load_cache().get("flatiron") or {}).get("listed") or list(health)
+    sync_features(health, listed)
+    sync_rank(latest, health, listed)
+    healthy = by_rank([m for m, h in health.items() if h.get("ok")], routing()["rank"])
+    # Flatiron first; when every flatiron model is down, config keeps flatiron/Kimi-K3 and the
+    # children fail over through fallback_providers. The next healthy sync restores real routing.
+    prov, model = ("flatiron", healthy[0]) if healthy else ("flatiron", "moonshotai/Kimi-K3")
+    chain = [{"provider": CLAUDE, "model": m} for m in (latest["haiku"], latest["sonnet"], latest["opus"]) if m != model]
+    hermes = str(Path.home() / ".local" / "bin" / "hermes")
+    # Tier table for delegating parents: same strategy words as ROUTING_FILE, ids resolved live.
+    tiers_cfg = routing().get("tiers") or DEFAULT_ROUTING["tiers"]
+    tiers_yaml = {t: {"reasoning_effort": c["reasoning_effort"], "skills": list(c.get("skills", [])),
+                      "fallback": [{"provider": CLAUDE, "model": claude_id(latest, f)} for f in c["fallback"]]}
+                  for t, c in tiers_cfg.items()}
+    # prefer=cheapest tiers carry their own model: intern serves mechanical, junior serves code
+    cfg_now = routing()
+    for t, kind in (("intern", "mechanical"), ("junior", "code")):
+        if (tiers_cfg.get(t) or {}).get("prefer") == "cheapest":
+            m = next(flatiron_lanes(kind, t, [], [], cfg_now, health, []), None)
+            if m:
+                tiers_yaml[t] = {"reasoning_effort": tiers_yaml[t]["reasoning_effort"], "model": m, "provider": "flatiron",
+                                 "skills": tiers_yaml[t]["skills"], "fallback": tiers_yaml[t]["fallback"]}
+    want = {"delegation.fallback_providers": json.dumps(chain), "delegation.tiers": json.dumps(tiers_yaml),
+            "delegation.provider": prov, "delegation.model": model}  # provider+model: written last
+    changed, applied, cur = [], [], {}
+    with _config_lock():  # one sync at a time: reads, writes and rollback share the transaction
+        # every read first: any failed get must leave the config exactly as it is
+        for k in want:
+            try:
+                p = subprocess.run([hermes, "config", "get", k], capture_output=True, text=True, timeout=60)
+            except subprocess.TimeoutExpired:
+                print(f"config: hermes config get {k} timed out; sync failed, config unchanged")
+                return 1
+            if p.returncode != 0 and "Config key not set" not in p.stderr:
+                print(f"config: hermes config get {k} exited {p.returncode}: {_san(p.stderr)}; sync failed, config unchanged")
+                return 1
+            cur[k] = p.stdout.strip()  # an unset key reads as empty; the write below defines it
+        for key, val in want.items():
+            if key == "delegation.fallback_providers":
+                if re.findall(r"model:\s*(\S+)", cur[key]) == [c["model"] for c in chain]:
+                    continue
+            elif key == "delegation.tiers":
+                cur_models = re.findall(r"model:\s*(\S+)", cur[key])
+                want_models = [m for t in tiers_yaml.values() for m in ([t["model"]] if "model" in t else []) + [fb["model"] for fb in t["fallback"]]]
+                cur_provs = re.findall(r"provider:\s*(\S+)", cur[key])
+                want_provs = [p for t in tiers_yaml.values() for p in ([t["provider"]] if "provider" in t else []) + [fb["provider"] for fb in t["fallback"]]]
+                cur_efforts = re.findall(r"reasoning_effort:\s*(\S+)", cur[key])
+                want_efforts = [t["reasoning_effort"] for t in tiers_yaml.values()]
+                cur_skills = re.findall(r"^\s+- ([a-z][\w-]*)\s*$", cur[key], re.M)
+                want_skills = [s for t in tiers_yaml.values() for s in t["skills"]]
+                # shortcut: sorted() cannot see equal entries swapped between tiers; go per-tier if that ever matters
+                if sorted(cur_models) == sorted(want_models) and sorted(cur_provs) == sorted(want_provs) and cur_efforts == want_efforts and cur_skills == want_skills:
+                    continue
+            elif cur[key] == val:
+                continue
+            applied.append((key, cur[key]))  # recorded first: rollback covers a set that wrote and then raised
+            try:
+                subprocess.run([hermes, "config", "set", key, val], check=True, capture_output=True, timeout=60)
+            except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError) as e:
+                what = ("timed out" if isinstance(e, subprocess.TimeoutExpired)
+                        else f"exited {getattr(e, 'returncode', '?')}")
+                # a failed set after earlier sets rolls those back, one log line per restore
+                for rkey, old in reversed(applied):
+                    try:
+                        subprocess.run(([hermes, "config", "set", rkey, old] if old
+                                        else [hermes, "config", "unset", rkey]),
+                                       check=True, capture_output=True, timeout=60)
+                        print(f"config: restored {rkey} = {_san(old) or 'unset'}")
+                    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError):
+                        print(f"config: restore of {rkey} FAILED; config may hold a partial update")
+                print(f"config: hermes config set {key} {what} after {len(applied)} attempt(s); sync failed")
+                return 1
+            changed.append(f"{key}={val}")
+        print("config updated: " + "; ".join(changed) if changed else "config already current")
+        return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("status"); s.add_argument("--refresh", action="store_true")
+    p = sub.add_parser("pick"); p.add_argument("kind"); p.add_argument("--tier", default="senior")
+    p.add_argument("--failed", nargs="*", default=[]); p.add_argument("--refresh", action="store_true")
+    p.add_argument("--needs", default="", help="comma list of required features, e.g. vision,web")
+    ln = sub.add_parser("lanes"); ln.add_argument("kind"); ln.add_argument("--tier", default="senior")
+    ln.add_argument("--failed", nargs="*", default=[])
+    ln.add_argument("--needs", default="", help="comma list of required features, e.g. vision,web")
+    g = sub.add_parser("assign"); g.add_argument("nodes", nargs="+", metavar="NODE=KIND:TIER[:NEED,NEED]")
+    l = sub.add_parser("latest"); l.add_argument("family", choices=["opus", "sonnet", "sol", "haiku"])
+    l.add_argument("--refresh", action="store_true")
+    y = sub.add_parser("sync"); y.add_argument("--refresh", action="store_true")
+    mo = sub.add_parser("models"); mo.add_argument("--refresh", action="store_true")
+    a = ap.parse_args()
+    if a.cmd == "sync":
+        return sync(a.refresh)
+    if a.cmd == "models":
+        return print(json.dumps(models_report(a.refresh), indent=1))
+    if a.cmd == "status":
+        print(json.dumps({"flatiron": flatiron_status(a.refresh), "latest": {k: v for k, v in resolve_latest(a.refresh).items() if k != "at"}}, indent=1))
+    elif a.cmd == "pick":
+        needs = [n.strip() for n in a.needs.split(",") if n.strip()]
+        print(json.dumps(pick(a.kind, a.tier, a.failed, a.refresh, needs), indent=1))
+    elif a.cmd == "lanes":
+        needs = [n.strip() for n in a.needs.split(",") if n.strip()]
+        failed = [m for arg in a.failed for m in arg.split(",") if m]  # --failed MODEL ... or a comma list
+        print(json.dumps(lanes(a.kind, a.tier, failed, needs)))  # one line: the manager greps it into lane jobs
+    elif a.cmd == "assign":
+        specs = []
+        for spec in a.nodes:
+            node, eq, rest = spec.partition("=")
+            parts = rest.split(":")
+            if not eq or not node or len(parts) not in (2, 3) or not all(parts[:2]):
+                sys.exit(f"assign: bad node spec {spec!r}; want NODE=KIND:TIER[:NEED,NEED]")
+            needs = [n.strip() for n in parts[2].split(",") if n.strip()] if len(parts) == 3 else []
+            specs.append((node, parts[0], parts[1], needs))
+        print(json.dumps(assign(specs), indent=1))
+    else:
+        print(claude_id(resolve_latest(a.refresh), a.family))
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)
