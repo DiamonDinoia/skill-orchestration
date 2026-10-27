@@ -18,7 +18,7 @@ If two units name one file, merge them and re-check. Unowned files are gaps, not
 - Deliverable: one statement, checkable on its own.
 - Check: a command exiting nonzero while the deliverable is unmet.
 - File scope: exactly the disjoint set.
-- Tier: `intern`, `junior`, `senior` (default) or `principal`, cheapest that meets the check. Mechanical to intern, well-specified to junior, judgment to senior, hard-on-sight to principal. A failed check or crash escalates the unit one tier.
+- Tier: `intern`, `junior`, `senior` or `principal`. Start at the cheapest tier that can do the unit. Mechanical to intern, well-specified to junior, judgment to senior, hard-on-sight to principal. A failed check, crash or stall escalates one tier.
 
 ## Dispatch and report
 
@@ -33,7 +33,7 @@ Report contract (30 lines max):
 ## Integration
 
 1. Rerun every check on the integrated tree. A unit passing alone but failing integrated shared a file; merge the scopes, redo the split.
-2. Re-split failed or blocked units into the next wave. A failure surviving re-split goes to the user with options; never retry silently.
+2. A failed unit escalates one tier before any re-split. Follow manager:64: "Use escalation for a capability failure and a split for a scope problem." Re-split only when new independent concerns appear, into the next wave. A failure surviving escalation goes to the user with options; never retry silently.
 3. End when every deliverable passes integrated, or the user stops it.
 
 ## Computing waves
