@@ -1184,6 +1184,9 @@ def check_inflight_scan():
 
 
 def check_review():
+    if not tool_path("hermes-adversarial-review").is_file():   # host-local script, not shipped with the release
+        print("SKIP: hermes-adversarial-review not found, check_review skipped")
+        return
     v = load("hermes-adversarial-review")
     q = "INSTR\n=== DIFF START ===\n+AGENTS.md mention\n=== DIFF END ===\n"
     with tempfile.TemporaryDirectory() as d:
