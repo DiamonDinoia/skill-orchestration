@@ -253,9 +253,9 @@ A child session can be hibernated and woken between its own steps (the trace sho
 
 The same holds for the manager after its own wake. Reuse completed discovery reports; never re-pay discovery on stale fear. Re-probe only what a live brief anchors on (`status --short`, `rev-parse HEAD`), and `retry` the next graph node instead of re-dispatching finished nodes.
 
-1. A subagent report is at most 30 lines; longer goes back for compression. Evidence is machine-checked: test names, query counts, grep hits.
+1. A child report follows the length rules of `references/child-rules.md`. Proof is machine-checked: test names, query counts, grep hits.
 - A profile of a language whose compiler inlines by default (Julia, C++, Rust) understates every hot kernel in its self-time: the inlined body charges to the caller's frame while the kernel name keeps only samples above the threshold. Derive the kernel's share from inclusive counts at the call sites and from per-line counts inside the function's own body lines (a flat profile's file:line rows), never from self-time alone; an Amdahl bound built from self-time reads an order of magnitude too small.
-2. Evidence over 10 lines goes to a file; the report carries the path plus at most 10 decisive lines, on failure the first error.
+2. The full report goes to `report.md` in the `evidence` dir. The summary gives its path and the first error line of each check that fails.
 3. Diffs, listings and logs travel as path plus counts, never inline. Repeat them to the user the same way unless asked.
 4. Follow-ups resume the agent that produced the work; the manager does not re-read dispatched artifacts.
 5. Independent dispatches go out in one message and run concurrently; one user report per batch; questions and decisions batch the same way.
@@ -263,16 +263,14 @@ The same holds for the manager after its own wake. Reuse completed discovery rep
 
 ## Report contract
 
-The first line names the provider and model the subagent uses, read from its own runtime; the manager relays it to the user.
+The child rules live in `references/child-rules.md`. They cover report length, line 1, body content, no boilerplate and `report.md`. Each brief names that file in one line and holds only task-specific text.
 
-1. Outcome: done, blocked, or partial (partial names what is left and why). A stopped job names its stopper: brief rule, user message, or harness. An allowed skip is `UNRUN: <reason>`, never silently dropped.
-2. Evidence: the check that ran, the exact command, its exit status via `echo "exit=$?"` on the same line, at most 10 decisive lines verbatim. A mutation check names passed, failed-loud (caught at a contract check), or silent-pass (the defect went through). "Reverted and the tree is clean" is a fourth line, never a substitute.
-3. Open decisions, each with options and a recommendation.
-4. Nothing else.
+1. The manager reads the log of a one-shot child at its verdict and finding lines. It does not read a tail of constant length.
+2. Compression keeps full sentences. Do not use arrows, symbol-speak or missing words, because the reader must not decode them.
 
 ## Manager to user
 
-One message per batch: deliverables passed with the check that proved each; decisions taken alone, one line each; decisions needing the user, batched, each with a recommendation. Relay subagent evidence; never paraphrase it.
+One message for each batch. One line for each deliverable that passes, with the check that proved it. Expand only for deliverables that do not succeed, and for decisions the user makes. Report the decisions taken alone, one line each. Batch the decisions for the user, each with a recommendation. Send subagent proof and do not paraphrase it.
 
 - A config-level or outward-facing choice that needs the user goes out as one numbered block titled `I need N decisions from you`. Each item carries the verbatim payload (yaml, diff or command) plus a recommendation. A plain `yes` accepts every item. An answer that names items overrides the recommendation of only those items.
 
