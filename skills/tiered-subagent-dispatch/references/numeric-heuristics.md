@@ -16,6 +16,16 @@ A path with fewer stages has a lower real floor: spread/interp only has no FFT a
 
 A "false warn" that holds on adversarial data is not false. Check the tolerance the test actually exercises, and the one the user expects, before changing the library.
 
+## A per-cell win can be scatter, not mechanism
+
+Before a cause gets credit for one cell's improvement, compare the two runs' chosen parameters on that cell. Two pickers that land on different values for the same input (a sigma, a width, a transform size) do not compare like with like, and a small outcome gap between them is noise until rerun. Rerun each side over several seeds; agreement within about 15% across seeds marks the gap as scatter. Only a cell where both sides pick the same parameters and the error still differs carries mechanism evidence.
+
+A comparison gate's acceptance bar goes into the brief before any run: one threshold per metric the verdict names (fail count, refusal count, worst accepted ratio), plus the pre-existing rows a pass may still carry, plus one pre-authorized fallback candidate with its trigger. The report prints bar against observed per metric. A bar fixed after the numbers exist cannot fail, so it is not a check.
+
+## Nested stages share one tolerance budget
+
+A two-stage computation whose stages are each checked against the full tolerance lets the two errors add. A selection loop that sizes both stages at their own edge then lands the total up to about twice the tolerance. When the stage errors are independent, split the budget by root sum of squares (each stage gets tol/sqrt(2)) and state the derivation in a comment. When forced probes of the extreme choices in the search space all measure above tol, the cell is a capability floor: the honest answer is a refusal, not a fudge margin or a named exception.
+
 ## Applying review changes does not outrank regressions
 
 Apply a reviewer comment as written, one commit per comment, tied to the comment id. A review request still gets checked against the master behaviour: merge the change, then compare the chosen constants and reached accuracy against the branch before the change over both precisions, types and a tolerance sweep. A request that makes results looser than master is a regression: report it with the measurement, because a change asked for a known reason can still be the one the user asked you to catch.

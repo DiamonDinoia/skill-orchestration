@@ -20,7 +20,8 @@ A brainstorm decision log (`../brainstorm/SKILL.md`) or a raw request. Open inte
 3. Each deliverable names its file scope. Unlisted files are out of scope.
 4. One deliverable, one concern. Merge deliverables that share a file. A disjoint unit cannot own one.
 5. Commands needing a looked-up value go out with the value inline, never a placeholder. A leftover placeholder breaks the run after it edits system state.
-6. An open trade-off is a defect in the draft. Send it back to brainstorm. Do not encode a coin flip.
+6. Resolve looked-up values before the draft, not after acceptance: one cheap preflight job (latest upstream release, tool availability) keeps a guessed version out of spec text the deliverers pin.
+7. An open trade-off is a defect in the draft. Send it back to brainstorm. Do not encode a coin flip.
 
 ## Iteration with the user
 
