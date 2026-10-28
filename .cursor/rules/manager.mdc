@@ -47,7 +47,7 @@ Ask the user when the decision is irreversible or outward-facing (commit, push, 
 
 ## Dispatch tiers
 
-The manager names a tier, never a model. The harness maps tier to model via agents named after the tiers. The ranker's placement reasons are not persisted; only the rank order survives. A report can quote the ranking, never why one model ranks above another; a child asked for the reason gets the rank table plus that sentence, not a reconstructed rationale. Where missing, prepend the role description to the default subagent's prompt and take the closest model class. Map the session-start provider list (`scripts/models.py`) to tiers from family knowledge; empty means harness defaults. A binding may attach reasoning effort, extra skills and fallback models per tier. Never pin a model name in a brief; resolve it at dispatch through the binding.
+The manager names a tier, never a model. The harness maps tier to model via agents named after the tiers. The ranker's placement reasons are not persisted; only the rank order survives. A report can quote the ranking, never why one model ranks above another; a child asked for the reason gets the rank table plus that sentence, not a reconstructed rationale. Where missing, prepend the role description to the default subagent's prompt and take the closest model class. Map the session-start provider list (`hermes-dispatch-route models`) to tiers from family knowledge; empty means harness defaults. A binding may attach reasoning effort, extra skills and fallback models per tier. Never pin a model name in a brief; resolve it at dispatch through the binding.
 
 A screenshot or image verdict goes to the cheapest binding model that reads images; on "unsure" it moves one tier up.
 
@@ -58,7 +58,11 @@ A screenshot or image verdict goes to the cheapest binding model that reads imag
 | `senior` | Implementation with judgment calls; code review. |
 | `principal` | Numerics, SIMD, concurrency, performance, unclosed debugging, open-ended design. |
 
+The intern tier and the mechanical kind go to the fastest model that passes, usually Qwen. Sync pins the intern tier to the first lane for the mechanical kind, with no capacity check. `pick` checks capacity at each dispatch. The principal tier keeps its anchor-first pick. Qwen-first does not apply to it. Each `reasoning_effort` a tier names is at most high. The router changes a value the pinned model refuses to the nearest accepted value at or above it, else to the highest accepted value. Kimi-K3 accepts `low`, `high` and `max`. Qwen accepts `xhigh`, `medium` and `low`. Mistral accepts `none` and `high`.
+
 The default starting tier is the cheapest that can do the job, normally `intern` or `junior`. `senior` and above is for review work or after a junior failure. Hard on sight goes to `principal`. Escalate one tier per failed check, crash or stall. A mechanical check, a doc edit or a nit fix starting at senior or principal is a dispatch defect. Any tier escalates ambiguity with `[ESCALATE-TO-MANAGER] <problem> <options> <recommendation>`.
+
+Each manager splits work until each leaf fits the cheapest tier that can do it, then starts the leaf there. A child that can spawn does the same for its own leaf nodes. If a leaf does not succeed, the manager runs `dag.py fail GRAPH ID`, then `dag.py escalate GRAPH ID`. The manager sends the node again at the new tier. A `principal` leaf that does not succeed goes to the parent manager. Write one row for each child outcome to `~/.hermes/cache/dispatch-route/outcomes.jsonl`. Each JSONL row has the fields `ts`, `node`, `kind`, `tier`, `model`, `verdict` and `note`. An `interrupted` or `blocked` verdict is not a `failed` verdict. `HERMES_DISPATCH_LEDGER` overrides the ledger path. `pick`, `lanes` and `assign` skip a model for a kind when its last 3 ledger rows for that kind all have a bad verdict. A bad verdict is `hung`, `fabricated`, `missed-defects`, or a verdict that starts with `failed`. A hyphenated verdict counts as its stem. Mechanical and intern picks prefer the Qwen lane.
 
 Every brief states deliverable, check, files in scope (unlisted files are out) and the report contract. It names the target's initial state (`git -C <path> status --short`, `rev-parse HEAD`; for a staged file outside git, its sha256) and a stop rule the child fires without inference ("tip differs: stop", "sha256 differs: stop"). The manager, never the engineer, resolves check-versus-file conflicts. The `~/.claude/CLAUDE.md` standing rules bind every subagent.
 
@@ -95,6 +99,8 @@ Encode an approved push scope as a stop rule: name the approved branch and old-t
 ## Dispatch graph
 
 Before dispatch, the manager writes each deliverable as a node of a graph file in its scratch directory. A node lists `deps` (nodes whose output it reads), `files` (paths it writes) and `resources` (shared things its checks use). Run `python3 scripts/dag.py check GRAPH` (path relative to this skill). Exit 1 means an invalid graph; fix the split, not the check. Exit 2 means a usage or filesystem error; fix the path, permissions or call and rerun, and tell the user if it persists.
+
+Each node has a `tier` field: `intern`, `junior`, `senior` or `principal`. `dag.py check` rejects a node without one.
 
 Keep the graph as wide as the work allows:
 
