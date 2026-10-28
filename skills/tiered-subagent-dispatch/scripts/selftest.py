@@ -1520,6 +1520,26 @@ def check_routing_null_list():
         assert json.loads(p.stdout)["model"] == "fixture-sonnet", (raw, p.stdout)
 
 
+def check_discovery_failure_names_family():
+    """A family whose discovery returns no models is named as failed with the PATH fix.
+    It is never printed as ok: the workstation hid a missing `claude` behind `claude: ok`."""
+    r = load("hermes-dispatch-route")
+    r.load_cache = lambda: {}
+    r.save_section = lambda *a: None   # the exit must happen before any cache write
+    ns = types.SimpleNamespace(stdout=json.dumps({"claude": [], "codex": ["gpt-7-sol"]}),
+                               stderr="", returncode=0)   # discover_models() returned None, so the list is empty
+    r.subprocess = types.SimpleNamespace(run=lambda *a, **k: ns, TimeoutExpired=subprocess.TimeoutExpired)
+    try:
+        r.resolve_latest()
+    except SystemExit as e:
+        msg = str(e)
+    else:
+        raise AssertionError("resolve_latest did not exit on a failed discovery")
+    assert "claude: failed" in msg, msg
+    assert "claude: ok" not in msg, msg
+    assert "export PATH=$HOME/.local/bin:$PATH" in msg, msg
+
+
 if __name__ == "__main__":
     check_route(); check_tiers(); check_effort_clamp(); check_lanes(); check_needs(); check_default_features()
     check_probe_fallback()
@@ -1535,4 +1555,5 @@ if __name__ == "__main__":
     check_ledger_invalid_utf8(); check_fallback_ledger_demotes(); check_routing_null_list()
     check_fallback_missing_id()
     check_fallback_dead_resolved()
+    check_discovery_failure_names_family()
     print("selftest OK")
