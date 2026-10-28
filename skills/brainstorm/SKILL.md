@@ -27,7 +27,7 @@ A request with one reading goes straight to spec. A question the codebase can an
 
 ## Recon budget
 
-- Recon runs on subagents only. Cap each report at 30 lines.
+- Recon runs on subagents only. Each report obeys the limit in manager references/child-rules.md.
 - A child that cannot dispatch subagents asks its parent for recon.
 - Evidence over 10 lines goes to a file. Report the path and the decisive lines.
 - The brainstormer never reads raw logs, listings or diffs itself.

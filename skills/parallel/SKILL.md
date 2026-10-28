@@ -24,10 +24,12 @@ If two units name one file, merge them and re-check. Unowned files are gaps, not
 
 Dispatch all units in one concurrent message. Each prompt carries the unit definition verbatim plus the report contract. During the wave, prepare integration; read no unit output.
 
-Report contract (30 lines max):
+Report contract:
+
+Each report obeys the limit in manager references/child-rules.md.
 
 1. Outcome: done, blocked, or partial; partial names what is left and why.
-2. Evidence: check command, exit status, up to 10 decisive lines verbatim; longer output goes to a file, report its path.
+2. Evidence: the first error line of each failing check. The full output goes to `report.md` in the evidence dir.
 3. Open decisions, each with options and a recommendation.
 
 ## Integration
