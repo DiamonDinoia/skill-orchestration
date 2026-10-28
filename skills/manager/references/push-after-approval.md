@@ -25,7 +25,7 @@ When direct push to main is not approved, the approved sha lands through a branc
 - Verify with `ls-remote`: the new remote branch prints the approved sha and `refs/heads/main` is unchanged.
 - Merge only on explicit approval after `gh pr checks` passes. Match the repo's merge style: `git log --merges -5` on main shows whether history uses merge commits or squash, and the merge uses the matching `gh pr merge` mode with `--match-head-commit <approved-sha>` so a moved head stops the merge. Verify MERGED with `gh pr view --json state,mergeCommit`.
 - Fast-forward the user's checkout onto the new main, then delete the merged local branch (`git branch -d`). The remote branch survives the merge unless the repo deletes on merge; list it and leave deletion to the user.
-- A consumer repo pinned to the old sha by commit (a FetchContent `GIT_TAG`) keeps building after the merge: the pinned sha stays in main's history. Its API-update branch stays local; the pin bump is its own outward-facing step, not part of this landing.
+- A consumer repo pinned to the old sha by commit (a FetchContent `GIT_TAG`) keeps building after the merge. The pinned sha stays in main's history only for merge commits. A squash merge drops it, so the consumer's next pin target is the mergeCommit sha from `gh pr view --json mergeCommit`. Its API-update branch stays local; the pin bump is its own outward-facing step, not part of this landing.
 
 ## Local cleanup
 

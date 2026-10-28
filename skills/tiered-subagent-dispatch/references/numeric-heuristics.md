@@ -24,7 +24,7 @@ A comparison gate's acceptance bar goes into the brief before any run: one thres
 
 ## Nested stages share one tolerance budget
 
-A two-stage computation whose stages are each checked against the full tolerance lets the two errors add. A selection loop that sizes both stages at their own edge then lands the total up to about twice the tolerance. When the stage errors are independent, split the budget by root sum of squares (each stage gets tol/sqrt(2)) and state the derivation in a comment. When forced probes of the extreme choices in the search space all measure above tol, the cell is a capability floor: the honest answer is a refusal, not a fudge margin or a named exception.
+A two-stage computation whose stages are each checked against the full tolerance lets the two errors add. A selection loop that sizes both stages at their own edge then lands the total up to about twice the tolerance. When the errors can add, split the budget. Each stage gets tol/2, so the errors add to at most tol. Use root sum of squares (each stage gets tol/sqrt(2)) only for an explicit RMS or statistical error contract, and state the derivation in a comment. When forced probes of the extreme choices in the search space all measure above tol, the cell is a capability floor: the honest answer is a refusal, not a fudge margin or a named exception.
 
 ## Applying review changes does not outrank regressions
 

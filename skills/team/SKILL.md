@@ -84,7 +84,7 @@ git -C "<integration checkout>" merge --ff-only <branch>
 
 ## Review
 
-Review audits. Review never edits.
+Review audits. Review never edits the code or the branch.
 
 1. Have fresh-context reviewers who did not write the work run every deliverable check from the state file.
 2. List dead worktrees with `git worktree list` and unmerged branches with `git branch --no-merged <integration branch>`.
@@ -149,7 +149,7 @@ Cross-harness conventions outside this section: the slash invocations (`/team ..
 ## Rules
 
 - The standing rules in `~/.claude/CLAUDE.md` bind every engineer.
-- Critics and reviewers never edit. Engineers edit only their own worktree. The manager edits the state file, PRUNE removals, conflict resolutions, and, as an inline engineer, that engineer's worktree.
+- Critics and reviewers never edit the code or the branch. Engineers edit only their own worktree. The manager edits the state file, PRUNE removals, conflict resolutions, and, as an inline engineer, that engineer's worktree.
 - A reviewer never reviews its own work. Every review uses fresh context.
 - Merges and `team/*` deletions need user consent. The manager asks once per execute run, and the answer covers the whole run, including end-of-run cleanup.
 - Any agent may emit `[ESCALATE-TO-MANAGER] <problem> <options> <recommendation>`. The manager resolves and records the decision in Notes.
