@@ -1,5 +1,5 @@
 ---
-description: Split an approved spec or plan with disjoint units into one concurrent dispatch wave
+description: Split an approved spec with disjoint units into dispatch waves
 argument-hint: "[work]"
 ---
 

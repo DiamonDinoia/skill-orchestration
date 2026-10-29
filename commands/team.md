@@ -1,5 +1,5 @@
 ---
-description: Iterative multi-agent orchestration — split, critique, worktree fan-out, review, re-split until deliverable passes
+description: Round-based multi-agent execution of one task with worktree fan-out and review
 argument-hint: "[task]"
 ---
 
