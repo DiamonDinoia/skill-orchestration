@@ -220,16 +220,16 @@ def resolve_latest(refresh=False):
          "sol": best(found.get("codex", []), r"gpt-\d+(\.\d+)?-sol") or prev.get("sol")}
     missing = [k for k in ("opus", "sonnet", "sol") if not r[k]]  # haiku is checked where used (claude_id)
     if missing:
-        def fam_status(fam, cli):
+        def fam_status(fam, hint):
             # an empty list means discovery found nothing; never report that family as ok
             if found.get(fam):
                 return f"{fam}: ok"
             err = found.get(f"{fam}_err")
-            return (f"{fam}: failed{f' ({err})' if err else ''}; "
-                    f"check `{cli}` is on PATH, for example export PATH=$HOME/.local/bin:$PATH")
+            return f"{fam}: failed{f' ({err})' if err else ''}; {hint}"
         sys.exit(f"hermes-dispatch-route: could not discover latest {', '.join(missing)} "
-                 f"({fam_status('claude', 'claude')}; {fam_status('codex', 'codex')}); "
-                 "check `claude` login and `hermes auth` for openai-codex")
+                 f"({fam_status('claude', 'check `claude` is on PATH, for example export PATH=$HOME/.local/bin:$PATH')}; "
+                 f"{fam_status('codex', 'check `hermes auth` for openai-codex')}); "
+                 "check `claude` login")
     save_section("latest", r)
     return r
 

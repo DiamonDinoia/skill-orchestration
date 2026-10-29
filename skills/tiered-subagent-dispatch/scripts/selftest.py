@@ -1521,12 +1521,14 @@ def check_routing_null_list():
 
 
 def check_discovery_failure_names_family():
-    """A family whose discovery returns no models is named as failed with the PATH fix.
-    It is never printed as ok: the workstation hid a missing `claude` behind `claude: ok`."""
+    """A family whose discovery returns no models is named as failed with its fix hint
+    (PATH for claude, `hermes auth` for codex). It is never printed as ok: the workstation
+    hid a missing `claude` behind `claude: ok`."""
     r = load("hermes-dispatch-route")
     r.load_cache = lambda: {}
-    r.save_section = lambda *a: None   # the exit must happen before any cache write
-    ns = types.SimpleNamespace(stdout=json.dumps({"claude": [], "codex": ["gpt-7-sol"]}),
+    calls = []
+    r.save_section = lambda *a: calls.append(a)   # the exit must happen before any cache write
+    ns = types.SimpleNamespace(stdout=json.dumps({"claude": [], "codex": []}),
                                stderr="", returncode=0)   # discover_models() returned None, so the list is empty
     r.subprocess = types.SimpleNamespace(run=lambda *a, **k: ns, TimeoutExpired=subprocess.TimeoutExpired)
     try:
@@ -1538,6 +1540,10 @@ def check_discovery_failure_names_family():
     assert "claude: failed" in msg, msg
     assert "claude: ok" not in msg, msg
     assert "export PATH=$HOME/.local/bin:$PATH" in msg, msg
+    assert "codex: ok" not in msg, msg
+    assert "check `codex` is on PATH" not in msg, msg
+    assert "check `hermes auth` for openai-codex" in msg, msg
+    assert not calls, f"cache write before the exit: {calls}"
 
 
 if __name__ == "__main__":
