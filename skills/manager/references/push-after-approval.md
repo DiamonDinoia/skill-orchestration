@@ -1,3 +1,5 @@
+Load this file to push after approval.
+
 # Push and clean up after an approved fix
 
 Run only after explicit user approval and after the final review round passed on the exact tip to push. The approval message covers exactly the shas named in it; anything else (other branches, tags, force) stays out.

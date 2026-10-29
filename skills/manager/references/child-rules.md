@@ -1,3 +1,5 @@
+Load this file for child report rules.
+
 # Child rules
 
 A brief names this file in one line and holds only task-specific text. The child obeys the rules below on each task.

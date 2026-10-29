@@ -1,3 +1,5 @@
+Load this file for the fixup fold and per-commit build gate.
+
 # Fix-round fold and integration gate
 
 Mechanics of the merge after a fix round and the gate that proves it.
