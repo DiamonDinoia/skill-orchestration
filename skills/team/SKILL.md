@@ -41,7 +41,7 @@ Produce deliverables a reviewer can check without contacting the user.
 4. If the state file lacks Dispatch preferences, decide the engineer dispatch and record it. It is reversible, so decide without asking the user.
 5. Summarize the deliverables to the user. Interview ends there.
 
-The interview can surface an open trade-off, such as a choice no experiment settles. When it does, run the brainstorm skill first (skill `brainstorm`). The decision log feeds the deliverables. Later questions go to the run report; there is no second interview.
+The interview can surface an open trade-off, such as a choice no experiment settles. When it does, run the brainstorm skill first (skill `brainstorm`, SKILL.md). The decision log feeds the deliverables. Later questions go to the run report; there is no second interview.
 
 ## Plan
 
@@ -86,7 +86,7 @@ git -C "<integration worktree>" merge --ff-only <branch>
 
 `<branch>` is the accepted branch, `team/<round>-<role>` or its `-<attempt>` variant after a retry. The manager resolves rebase conflicts inside the conflicted hunks only.
 11. Update the state file: subproblem statuses, round verdicts, decisions.
-12. If deliverables remain open, re-split from the remaining state (Plan). The run holds at most two rounds. After that, hand the open deliverables to the user with options.
+12. If deliverables remain open, re-split from the remaining state (Plan). The run holds at most two rounds. Each subproblem takes at most one fix round and one re-check in the whole run (rule T2 in skill `manager`, SKILL.md). After that, hand the open deliverables to the user with options.
 13. Mark every deliverable done when its check passes on the integration branch. The third failure of one subproblem escalates to the user.
 
 ## Review

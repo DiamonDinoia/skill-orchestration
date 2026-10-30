@@ -1,15 +1,16 @@
 # orchestration
 
-Six skills share one pipeline: brainstorm explores a decision, spec pins it down,
-parallel and team execute it, and manager is the persistent role the others build on.
-`tiered-subagent-dispatch` runs the delegation ladder in Hermes.
+Six skills share one split-execute-review pipeline. Per-skill scope: `brainstorm` decides, `spec`
+pins the decision, `parallel` runs one wave of disjoint-file units, `team` runs rounds in worktrees,
+and `manager` owns the dispatch graph and the shared review contract (rules T1-T6, P1, D1, R1 in
+skill `manager`, SKILL.md). `tiered-subagent-dispatch` runs the delegation ladder in Hermes.
 Each harness maps the four dispatch tiers (`intern`/`junior`/`senior`/`principal`) to its
 own models; the skills name a tier, never a model.
 
 | Skill | Does |
 |---|---|
 | `brainstorm` | Recon by dispatch → interpretations → one batched question round with recommendations → decision log |
-| `spec` | Turns decisions into deliverables, each with a check that can fail; accepted specs land in `memory/<project>/specs/` |
+| `spec` | Turns decisions into deliverables, each with a check that can fail; accepted specs land in `~/repos/memory/<project>/specs/` |
 | `parallel` | Executes a spec as disjoint-file dispatch units; `scripts/waves.py` (stdlib `graphlib`) computes waves and the critical path |
 | `team` | Multi-agent rounds (triage/plan/execute/review) in worktrees; the invoking agent assumes the manager role |
 | `manager` | Persistent orchestration role: spec first, tiered dispatch, hard context budget |
@@ -47,7 +48,8 @@ Claude Code: in `/plugin`, enable auto-update for the `orchestration` marketplac
 orchestration@orchestration` pulls the new release.
 
 Restart the harness after installing. `/manager <task>` starts the role; "stop manager" ends it.
-The other skills trigger on their descriptions or by name (`/team`, `/brainstorm`, ...).
+The other skills trigger on their descriptions or by name (`/brainstorm`, `/spec`, `/parallel`).
+`team` triggers by name only (`/team`).
 
 ## Validation
 

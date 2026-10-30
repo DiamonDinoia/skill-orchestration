@@ -2,9 +2,23 @@
 
 Detail behind the tier and ladder rules in SKILL.md. Load before changing `references/flatiron-routing.json`, the router or a tier table, or before debugging a `pick` result. The routing facts here match `scripts/hermes-dispatch-route`. When prose and code disagree, fix the prose.
 
+## Commands
+
+`scripts/hermes-dispatch-route` is the router. Its commands:
+
+- `status [--refresh]` prints flatiron health and the resolved latest Claude and OpenAI ids.
+- `pick KIND [--tier TIER] [--failed MODEL,...] [--needs FEATURE,...] [--refresh]` returns `{provider, model, reason, flags, skipped}`.
+- `lanes KIND [--tier TIER] [--needs FEATURE,...] [--failed MODEL,...]` returns one JSON line with every eligible flatiron lane.
+- `assign NODE=KIND:TIER[:NEED,NEED] ...` returns one JSON entry per node.
+- `latest opus|sonnet|sol|haiku` returns the bare model id of a family and resolves any context variant.
+- `models [--refresh]` lists every gateway model with health, rank hint, kinds and new flags.
+- `sync [--refresh]` writes discovered ids into the Hermes config.
+
+KIND is code, debug, frontend, research, prose, mechanical or vision. TIER is intern, junior, senior or principal. A flatiron `pick` takes `--reasoning EFFORT`, clamped to the accepted values below. `-s SKILL` adds one tier skill to the flags of every pick. `--needs FEATURE` keeps only a model whose `features` entry has every named feature true. A model with no entry has no capabilities, and `pick vision` means `--needs vision`.
+
 ## Effort clamp
 
-Each `reasoning_effort` a tier names is at most `high`. The top-level `efforts` map of `references/flatiron-routing.json` holds the accepted values per model. `sync` writes an entry from the gateway's rejection text. `pick` and `assign` clamp to the entry: a refused value becomes the nearest accepted value at or above it, else the highest accepted value. A lane-launcher brief repeats the accepted values of the models it may get and makes the launcher name every value it replaced. A replaced value means the `efforts` map misses that model: write the entry after the run. The reasoning effort applies only when the child runs on flatiron. A refusal line in a child's log means the manager reroutes the deliverable.
+Each `reasoning_effort` a tier names is at most `high`. The top-level `efforts` map of `references/flatiron-routing.json` holds the accepted values per model. `sync` writes an entry from the gateway's rejection text. `pick` and `assign` clamp to the entry: a refused value becomes the nearest accepted value at or above it, else the highest accepted value. A lane-launcher brief repeats the accepted values of the models it may get and makes the launcher name every value it replaced. A replaced value means the `efforts` map misses that model: write the entry after the run. The reasoning effort applies only when the child runs on flatiron. A refusal line in a child's log means the manager reroutes the deliverable. Kimi-K3 accepts `low`, `high` and `max`. Qwen accepts `xhigh`, `medium` and `low`. Mistral accepts `none` and `high`.
 
 ## Gateway model set
 
@@ -12,6 +26,7 @@ The model set comes from the gateway, not from a list.
 
 - A routing child runs `hermes-dispatch-route models [--refresh]`. It returns the model list with health, rank hint and the `features` columns.
 - `sync` probes a new model for vision with 4 quadrant questions on two random 2x2 colour grids. Vision true needs 4 right answers of 4. False needs 2 clear wrong answers and no inconclusive reply. A refusal that names a colour is not an answer. A failed, empty, truncated or refused probe keeps the old entry. `sync` re-probes an entry older than 7 days. `sync` never probes web on flatiron.
+- Web is false for every flatiron model. The provider rule sets it and `sync` never probes it. The Claude rungs and the sol model have web true.
 - The 6-hourly `sync` ranker places a new or returning model in the `routes` lists. Placement obeys the anchor floor of the kind. Ranks are relative, so a new model renumbers the whole set and the ranker re-ranks the list.
 - A model the gateway lists no more drops out of the rank map after 7 days. The drop also removes it from every `routes` list.
 - After 3 rejected ranker attempts for one unranked set, `sync` stops calling the ranker until the set changes. Hand-rank from the reason in the sync log then. Each ranker run costs paid quota. The ranker-rejects state, the lock and the dated backups live in `~/.hermes/cache/dispatch-route/`.
@@ -24,17 +39,30 @@ A flatiron model is eligible for a kind with a `routes` list only if that list n
 
 ## `pick` and `lanes`
 
-- `pick KIND [--tier TIER]` probes the gateway (60 s cache; `--refresh` forces) and returns `{provider, model, flags, reason, skipped}`.
+- `pick` probes the gateway (60 s cache; `--refresh` forces) and returns the first eligible lane.
 - A `principal` tier takes only the top 3 rank values of the listed models. Its pick leads with the kind's `floors` anchor. It is not the top rank. When the user asks for the top-ranked model instead, take it from the rank map, where a higher rank value means stronger. Never pick by `routes` list order, which encodes a preference, not strength.
-- `pick KIND --tier TIER` returns the cheapest healthy model in the `routes` list of KIND, except for the mechanical kind and the intern tier, which take the cheapest lane of the kind. The tier pins come from `flatiron_lanes`, lowest rank value first.
-- `--failed M,...` restricts the pick to models strictly stronger than every failed one. When no such model is healthy, `pick` returns the next rung of the tier's fallback list in the routing file. The quota rule of SKILL.md gates that rung: stop and ask the user before it runs.
-- `lanes KIND` lists every eligible flatiron lane plus one `{fallback: true}` entry when none fits.
+- `pick KIND --tier TIER` returns the cheapest healthy model in the `routes` list of KIND, except for the mechanical kind and the intern tier, which take the cheapest lane of the kind. An intern pick and every mechanical pick lead with the fastest Qwen lane that passes. The principal pick is not Qwen-first. The tier pins come from `flatiron_lanes`, lowest rank value first. `sync` writes the pins into the Hermes config: the intern pin is the first mechanical lane, the junior pin is the first code lane.
+- `--failed` restricts the pick to models strictly stronger than every failed one. When no such model is healthy, `pick` returns the next rung of the tier's fallback list in the routing file. The quota rule of SKILL.md gates that rung: stop and ask the user before it runs.
+- `lanes` lists every eligible flatiron lane plus one `{fallback: true}` entry when none fits.
 
 ## `assign` and the in-flight scan
 
-- `assign NODE=KIND:TIER[:NEED,NEED] ...` prints one JSON entry per node: node, kind, tier, provider, model, flags, load, reason, fallback. Each node goes to the eligible model with the fewest in-flight jobs. Ties break by pick order. The count rises by 1 per assignment in the batch. There is no job cap: a model takes every parallel job that fits its eligibility.
+- `assign` prints one JSON entry per node: node, kind, tier, provider, model, flags, load, reason, fallback. Each node goes to the eligible model with the fewest in-flight jobs. The count rises by 1 per assignment in the batch. Ties break by pick order. The entry keeps the kind and tier eligibility filters of `pick`.
+- There is no per-model job cap. The `capacity` map is gone: the router ignores a leftover `capacity` key in `references/flatiron-routing.json`. The old map gave Qwen 4 slots and let one lane ride a multi-slot model. Now the router spreads a batch by the in-flight count alone and never skips a model for load.
 - The in-flight count is a live scan of `hermes chat --provider flatiron` processes. The scan matches the model argument in the forms `-m MODEL`, `--model MODEL` and `--model=MODEL`. There is no state file, so the count cannot go stale.
 - The command re-reads health each batch. When no eligible model fits, one entry carries `"fallback": true` with the rung `pick` would return.
+- A parallel wave of `hermes chat` lanes runs `assign`. When `assign` cannot fit the wave, pin `-m` per lane from `models --refresh`. This is the exception to the never-pin rule. Give adjacent lanes adjacent-rank entries from the healthy list with rank and ping. Keep the kind and tier eligibility filters there too, and quote the rank list in the dispatch note.
+- One lane that stalls on `interrupted: waiting for model response` for many minutes can starve its siblings behind the same instance.
+
+## Model pins
+
+- A dispatch route with no per-task model slot silently drops the pin and runs the route's bound model. The completion lines show the substitution and no error. When the route cannot carry the pin, launch the job as a recorded background process with provider and model flags on the command line.
+- Model and provider fix at process start. A running child cannot self-switch.
+- A `hermes chat` launch whose `-m` model the resolved provider cannot serve falls back to the session default instead of erroring.
+
+## User route override
+
+The user can override the default dispatch route for one task. Resolve the exact name and any context variant once with `latest <family>`. Launch the task's later children as background `hermes chat` processes with `--yolo`, `--max-turns` and a query-file brief, with the resolved model pinned.
 
 ## Routing ship's gate
 

@@ -88,7 +88,7 @@ Split work recursively until each node carries one concern, one file set and one
 
 Reviews stay one tier above the author. An intern's work takes a `junior` review. A `senior` author's work takes a `principal` review.
 
-If a leaf does not succeed, run `dag.py fail GRAPH ID`, then `dag.py escalate GRAPH ID`. Send the node again at the new tier. Escalate also resets the failed node's failed dependents to todo. A `principal` leaf that does not succeed goes to the parent manager.
+If a leaf does not succeed, run `dag.py fail GRAPH ID`, then `dag.py escalate GRAPH ID`. Send the node again at the new tier. Escalate also resets the node's done or failed transitive dependents to todo, the same reset that `retry` does. A `principal` leaf that does not succeed goes to the parent manager.
 
 Write one row for each child outcome to `~/.hermes/cache/dispatch-route/outcomes.jsonl`. Each JSONL row has the fields `ts`, `node`, `kind`, `tier`, `model`, `verdict` and `note`. An `interrupted` or `blocked` verdict is not a `failed` verdict. `HERMES_DISPATCH_LEDGER` overrides the ledger path.
 
@@ -122,7 +122,7 @@ Before dispatch, write each deliverable as a node of a graph file in the scratch
 
 Run `python3 scripts/dag.py check GRAPH`, with the path relative to this skill. Exit 1 means an invalid graph. Fix the split, not the check. Exit 2 means a usage or filesystem error. Fix the path, permissions or call and rerun. Tell the user if it persists.
 
-Each node has a `tier` field: `intern`, `junior`, `senior` or `principal`. `dag.py check` rejects a node without one.
+Each node has an optional `tier` field: `intern`, `junior`, `senior` or `principal`. A node without one is `senior`. `dag.py check` rejects a bad value with `node X: invalid tier Y`.
 
 Keep the graph as wide as the work allows:
 
@@ -135,9 +135,12 @@ Keep the graph as wide as the work allows:
 Scheduler rules:
 
 - `ready GRAPH --max N` prints at most N runnable ids. N is the free child slots.
-- Grow a live graph with `dag.py add GRAPH ID --deps --files`. A node with no `state` is todo. Run `check` before any `start`, same as a fresh graph. New nodes enter the todo pool.
+- `dag.py plan GRAPH` is read-only. It prints `L<k>: <ids>` per depth level of open nodes, then `blocked: <ids>` for nodes behind a failed dep, then `width=N critical_path=N`.
+- Grow a live graph with `dag.py add GRAPH ID [--deps a,b] [--files x,y] [--resources r] [--tier T]`. It appends a `todo` node and runs `check`. It refuses a duplicate id or a bad node at exit 1 and writes nothing on refusal. Run `check` before any `start`, same as a fresh graph.
 - Run `start GRAPH ID...` on the printed ids. Dispatch only accepted ids, never before `start`. `start` refuses unready or repeated ids at exit 1 and writes nothing.
 - `check` rejects absolute paths, `..` paths after normalization, and a running or done node with an undone dependency. Symlinked aliases pass undetected.
+- `check` rejects a `path#symbol` entry with an empty path or an empty symbol. Two unordered nodes overlap on a path or on one symbol. Different symbols of one file coexist.
+- `check` prints `warning: stray top-level key X outside nodes` for a key outside `nodes`. `start` on such a key reports `unknown node X`.
 - Before two nodes share one file through `path#symbol` scopes, prove the splitter's reading on the real file in scratch. What the check treats as disjoint spans decides whether the parallel run is safe. A prose file's sections can fall into one shared span. A symbol that matches nothing passes the check silently.
 - A node that shares files with an earlier node declares it in `deps`. With the dep in place, `check` accepts the overlap. The rule includes done nodes. `check` rejects two unordered writers of one path in any state. So a late fix round depends on every earlier writer of its files, including the finished ones. Shrinking the file list to dodge the overlap hides real edits from the graph.
 - The manager is the only graph writer. Writes hold a lock file next to the graph. State changes go through `dag.py` commands, so no hand edit of the JSON is needed. Read the file even for a planned full overwrite. Read it before the first write of a graph at a reused scratch path.

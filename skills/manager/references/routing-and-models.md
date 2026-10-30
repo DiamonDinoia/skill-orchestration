@@ -2,29 +2,42 @@ Load this file when resolving models, lanes, web-verification nodes or a Sol rou
 
 # Routing and models
 
+Model routing facts live in skill `tiered-subagent-dispatch`, references/routing-mechanics.md. On conflict that skill wins. This file holds the manager rules that sit on top of those facts.
+
+## Pin checks
+
+The pinned reviewer model of the classification table is checked on the job's own runtime line. That is the completion header, the first report line, or the log's provider line. The check does not trust the report's own provider line. A route can substitute a model without an error. Substitution mechanics live in skill `tiered-subagent-dispatch`, references/routing-mechanics.md.
+When a banner names one model and the body line names another, the manager relays both names to the user and trusts neither one.
+When the runtime hides the model id, the report prints the launch line value with source `launch pin`. The manager compares it to the launch log.
+
+## Web-verification nodes
+
+The manager checks that analysis children on web-less models quote only the excerpt file of the fetch child. Any fact outside that file stays marked UNVERIFIED. Model web facts live in skill `tiered-subagent-dispatch`, references/routing-mechanics.md.
+
 ## Review-skill load and the Hermes one-shot
 
 Only on Hermes load `ponytail-review` in a `hermes chat` one-shot with `-s ponytail:ponytail-review`.
 
-## Web-verification nodes
+## User route override
 
-XiaomiMiMo/MiMo-V2.6-Pro-MOPD children have no web search/extract; route the fetch-verification node to a model with web access (haiku works). The cluster routes have no web access either; resolve a web-capable provider with `hermes-dispatch-route pick research --needs web`. When the consumers of research run on web-less models, the fetch child writes verbatim excerpts with URLs to a scratch file and the analysis children read only that file, marking anything outside it UNVERIFIED instead of quoting training memory. When a brief pins a model, the completion header is the check that the pin landed, not the report's provider line: a flatiron `moonshotai/Kimi-K3` header over a body line reading a different model is the signal, and the two disagree without error. The same disagreement shows up without a pin (a banner naming one model, the body line another); relay both names to the user instead of trusting either. A numeric claim identical before and after the reported edit (an unchanged diff stat, an unchanged count) fails arithmetic; check the claimed values against the diff at the stated tip sha before relaying them.
+A user route override binds the named task only. The next task returns to the binding's route. The override takes effect at the next spawn. Do not steer a live child to change its model. Model resolution and pin behaviour live in skill `tiered-subagent-dispatch`, references/routing-mechanics.md.
 
-## Model pins on review jobs
+## User model ban
 
-The classification table's pinned reviewer model is checked on the job's own runtime line (the first report line, or the log's provider line): a dispatch route with no per-task model slot silently drops the pin and runs the route's bound model, and the completion lines show the substitution without any error. When the route cannot carry the pin, launch the review as a recorded background process with provider and model flags on the command line, instead of re-dispatching through the pin-less route.
+A user model ban is session-scoped. It binds every task until the user lifts it.
 
-## Routing values
+## Numeric claims
 
-The intern tier and the mechanical kind go to the fastest model that passes, usually Qwen. Sync pins the intern tier to the first lane for the mechanical kind, with no capacity check. `pick` checks capacity at each dispatch. The principal tier keeps its anchor-first pick. Qwen-first does not apply to it. Each `reasoning_effort` a tier names is at most high. The router changes a value the pinned model refuses to the nearest accepted value at or above it, else to the highest accepted value. Kimi-K3 accepts `low`, `high` and `max`. Qwen accepts `xhigh`, `medium` and `low`. Mistral accepts `none` and `high`.
+A numeric claim that stays identical before and after the reported edit fails arithmetic. The manager checks the claimed values against the diff at the stated tip sha before it relays them.
 
-- When the user overrides the default dispatch route for a task (for example "use Opus for everything here"), resolve the exact name and any context variant once with `hermes-dispatch-route latest <family>` and dispatch that task's later children through `hermes chat` (background, `--yolo`, `--max-turns`, query-file brief). The override binds the named task only; the next task returns to the binding's route. Model and provider are fixed at process start: a running child cannot self-switch, so never steer a live child to change its model; the override takes effect on the next spawn. A `hermes chat` launch whose `-m` model the resolved provider cannot serve falls back to the session default instead of erroring; when a brief pins a model, the child's first report line (provider and model from its own runtime) is the check that the pin landed. A parallel wave of `hermes chat` lanes runs `hermes-dispatch-route assign`. It fits each node to the eligible model with the fewest in-flight jobs and the slots its capacity map grants. The map (skill `tiered-subagent-dispatch`, references/flatiron-routing.json) gives Qwen 4 slots, and `assign` keeps the kind and tier eligibility filters. Lanes can ride one multi-slot model. A node that does not fit a model's slots serializes behind the others. One lane's stall (`interrupted: waiting for model response`, elapsed climbing past many minutes) queues or starves its siblings behind the same instance. When `assign` cannot fit the wave, pin `-m` per lane from `hermes-dispatch-route models --refresh` as the exception to the never-pin rule. Give adjacent lanes adjacent-rank entries from the healthy list with rank and ping. Keep the kind and tier eligibility filters there too, and quote the rank list in the dispatch note. The launcher keeps a per-model record of busy and warm instances, dispatches to a warm instance before starting a cold one, and reuses the producing session for a follow-up fix round via `--resume <session_id>` with the original launch flags: the resumed child already has the repo, brief and pitfalls in context, so a follow-up costs a fraction of a cold start. The resume command repeats the saved flags and appends nothing job-shaping: a second occurrence of a pinned flag later in argv overrides the file's value, and the resume then dies on the flag-mismatch check before any work starts. A course correction to a halted job resumes with a delta spec that opens with a re-entry check (expected HEAD sha and clean status, stop on mismatch), then the decision and its steps, with the original brief repeated below it so the resumed child keeps the standing rules: `--resume` appends to the child's context, so the delta reads as the newer binding spec. Never substitute `--continue` for `--resume <id>` on a session launched with pinned flags: it picks up whatever session the directory resolves to and silently drops the pins (the model shows as the harness default, not the pin). A redo that discards the learned context launches fresh instead.
-- A fallback rung moves only inside the quota-free pool. A move to the subscription model is a named escalation that needs the user's approval.
-- `pick`, `lanes` and `assign` skip a model for a kind when its last 3 ledger rows for that kind all have a bad verdict. A bad verdict is `hung`, `fabricated`, `missed-defects`, or a verdict that starts with `failed`. A hyphenated verdict counts as its stem.
-- On user request the manager shows the rank table and each tier's eligibility rules. It never reconstructs a rationale.
-- A user model ban is session-scoped and binds every task until the user lifts it.
-- Each dispatch wave names the tier and the quota class of every lane in the report. A paid lane states its escalation reason.
-- When the runtime hides the model id, the report prints the launch line value with source `launch pin`. The manager compares it to the launch log.
-- A deliverable with rendered UI ships its screenshots through a vision check before the batch reports done.
+## Dispatch waves
 
-Provider and model facts also live in skill `tiered-subagent-dispatch`. On conflict that skill wins.
+Each dispatch wave names the tier and the quota class of every lane in the report. A move to a paid or subscription model is a named escalation that needs the user's approval. A paid lane states its escalation reason.
+
+## UI deliverables
+
+A deliverable with rendered UI ships its screenshots through a vision check before the batch reports done.
+
+## Rank table
+
+On user request the manager shows the rank table and each tier's eligibility rules. It never reconstructs a rationale.
