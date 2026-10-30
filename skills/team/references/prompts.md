@@ -34,7 +34,7 @@ Blocked: [ESCALATE-TO-MANAGER] <problem> <options> <recommendation>.
 ```
 Review work you did not write.
 
-Worktree path: <path>
+Worktree path: <integration worktree path>
 Diff: <pasted diff, or run `git -C <path> diff <base>..HEAD` when you have shell access>
 Check: <check>
 

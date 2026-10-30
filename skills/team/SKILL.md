@@ -56,7 +56,7 @@ Plan writes the state file only, never code, and ends when the split is recorded
 
 Dispatch each subproblem as soon as its dependencies are done. Rounds record state; they never hold back a ready subproblem.
 
-1. Record the starting branch in Notes. If the Integration Branch and Checkout fields are empty, the run is top-level. Set Branch to `team/integration`. Create a dedicated integration worktree from the current commit and record its path in Checkout. The user's checkout never runs `git checkout`, `git stash`, `git restore` or `git reset`. The step-10 merge never lands on another branch. Nested team runs are not supported, so an engineer never starts one. Each worktree path names a fresh directory beside the repository.
+1. Record the starting branch in Notes. If the Integration Branch and Checkout fields are empty, the run is top-level. Set Branch to `team/integration`. Create a dedicated integration worktree from the current commit and record its path in Checkout. The user's checkout never runs `git checkout`, `git stash`, `git restore` or `git reset`. The merge in step 7 never lands on another branch. Nested team runs are not supported, so an engineer never starts one. Each worktree path names a fresh directory beside the repository.
 
 ```bash
 BASE=$(git -C "<user checkout>" rev-parse HEAD)
@@ -72,12 +72,9 @@ git worktree add "<engineer worktree path>" -b team/<round>-<role> "$BASE"
 ```
 
 4. Dispatch every selected engineer at once: `dispatched` uses subagents, `inline` makes the manager the engineer. Give each engineer the Engineer prompt (references/prompts.md).
-5. An engineer that emits `[ESCALATE-TO-MANAGER]` ends. Let the others finish. Resolve the escalation, then re-dispatch the subproblem (step 9) or return it to the pool.
+5. An engineer that emits `[ESCALATE-TO-MANAGER]` ends. Let the others finish. Resolve the escalation, then re-dispatch the subproblem (step 10) or return it to the pool.
 6. The round ends when every engineer reports back. Record an engineer that ends without a report as a dropout in Rounds, and return the subproblem to the pool. A re-dispatch reruns only the checks the first attempt did not pass.
-7. Dispatch one combined reviewer over the merged change set, with the Reviewer prompt (references/prompts.md). The reviewer reports BLOCKER and MAJOR findings only (T1). Per-worktree checks stay the workers' own checks, not reviews. Re-dispatch or end-of-run cleanup removes a worktree without a report.
-8. Apply verdicts. ACCEPT passes. On PRUNE, remove the listed edits in the worktree and re-run the check before the merge. PRUNE covers correctness and out-of-scope edits only; log churn removals in Notes instead. On REJECT, record the failure and re-dispatch the subproblem once as a fix round. The re-check after that round covers the fixed findings only (T2).
-9. A re-dispatched subproblem removes its stale worktree and branch with `git worktree remove --force <previous worktree path>` and `git branch -D <previous branch name>`. Then it starts fresh per step 3 on branch `team/<round>-<role>-<attempt>`. `<attempt>` counts the dispatches of this subproblem this round and starts at 2.
-10. Under the run-level consent (Rules), run `git -C "<integration worktree>" rev-parse --abbrev-ref HEAD`. Stop unless it prints the integration branch. Rebase the engineer branch onto the integration branch inside the engineer worktree. Then:
+7. Merge each accepted engineer branch into the integration worktree. A branch is accepted when its engineer reported and its checks pass. Under the run-level consent (Rules), run `git -C "<integration worktree>" rev-parse --abbrev-ref HEAD`. Stop unless it prints the integration branch. Rebase the engineer branch onto the integration branch inside the engineer worktree. Then:
 
 ```bash
 git -C "<engineer worktree>" rebase <integration branch>
@@ -85,6 +82,9 @@ git -C "<integration worktree>" merge --ff-only <branch>
 ```
 
 `<branch>` is the accepted branch, `team/<round>-<role>` or its `-<attempt>` variant after a retry. The manager resolves rebase conflicts inside the conflicted hunks only.
+8. Dispatch one combined reviewer over the merged change set in the integration worktree, with the Reviewer prompt (references/prompts.md). The reviewer reports BLOCKER and MAJOR findings only (T1). Per-worktree checks stay the workers' own checks, not reviews. Re-dispatch or end-of-run cleanup removes a worktree without a report.
+9. Apply verdicts. ACCEPT keeps the merge. On PRUNE or REJECT, remove the listed edits on the integration branch in a new commit and re-run the checks. Never run `git reset`, `git push --force` or a history rewrite on the integration branch. PRUNE covers correctness and out-of-scope edits only; log churn removals in Notes instead. On REJECT, record the failure and re-dispatch the subproblem once as a fix round. The re-check after that round covers the fixed findings only (T2).
+10. A re-dispatched subproblem removes its stale worktree and branch with `git worktree remove --force <previous worktree path>` and `git branch -D <previous branch name>`. Then it starts fresh per step 3 on branch `team/<round>-<role>-<attempt>`. `<attempt>` counts the dispatches of this subproblem this round and starts at 2.
 11. Update the state file: subproblem statuses, round verdicts, decisions.
 12. If deliverables remain open, re-split from the remaining state (Plan). The run holds at most two rounds. Each subproblem takes at most one fix round and one re-check in the whole run (rule T2 in skill `manager`, SKILL.md). After that, hand the open deliverables to the user with options.
 13. Mark every deliverable done when its check passes on the integration branch. The third failure of one subproblem escalates to the user.
