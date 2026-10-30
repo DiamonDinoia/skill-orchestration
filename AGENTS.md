@@ -115,6 +115,8 @@ Every brief states deliverable, check, files in scope and the report contract. U
 
 Every brief carries the provider fence it needs. The first report line names provider and model from the child's own runtime. The manager checks that line before work counts.
 
+Worktree guards apply to every dispatch. A job whose checks run tests, builds or generators gets its own `git worktree`. Its brief routes every git command through `git -C <worktree>`. It bans `stash`, `checkout`, `restore` and `reset` in the user's checkout. Commits cover the job's own paths only. `references/fix-rounds-and-reviews.md` holds the detail.
+
 ## Dispatch graph
 
 Before dispatch, write each deliverable as a node of a graph file in the scratch directory. A node lists `deps`, `files` and `resources`. `deps` are nodes whose output it reads. `files` are paths it writes. `resources` are shared things its checks use, such as containers, images, emulation or CI cell directories and fixed ports. A sibling rebuild in a shared cell directory corrupts the running leg. So shared build and cell dirs are resources even when file lists are disjoint.
