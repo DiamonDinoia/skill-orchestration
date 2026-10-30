@@ -369,7 +369,7 @@ def pick(kind, tier, failed, refresh, needs=None):
     cfg, tcfg, needs = _pick_setup(kind, tier, needs)
     health = flatiron_status(refresh)
     latest = resolve_latest()
-    failed = set(failed or [])
+    failed = {m for arg in (failed or []) for m in arg.split(",") if m}  # --failed MODEL ... or MODEL,... list
     failed_fams = {fam for fam in ("haiku", "sonnet", "opus")
                    if any(fam in m for m in failed if "/" not in m)}
     floor = max((cfg["rank"].get(m, 0) for m in failed if m in cfg["rank"]), default=0)

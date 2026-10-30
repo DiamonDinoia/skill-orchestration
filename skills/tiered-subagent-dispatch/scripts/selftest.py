@@ -1545,6 +1545,17 @@ def check_discovery_failure_names_family():
     assert not calls, f"cache write before the exit: {calls}"
 
 
+def check_failed_comma_list():
+    """F6: `--failed MODEL,...` splits before the exclusions. The comma list picks exactly what
+    the space list picks, and a failed model never serves again."""
+    health = {m: {"ok": True} for m in (QWEN, MIST, KIMI)}
+    comma = _cli(["pick", "code", "--tier", "senior", "--failed", f"{QWEN},{MIST}"], models=health)
+    space = _cli(["pick", "code", "--tier", "senior", "--failed", QWEN, MIST], models=health)
+    assert comma.returncode == 0 and space.returncode == 0, (comma.stderr, space.stderr)
+    assert json.loads(comma.stdout) == json.loads(space.stdout), (comma.stdout, space.stdout)
+    assert json.loads(comma.stdout)["model"] not in (QWEN, MIST), comma.stdout
+
+
 if __name__ == "__main__":
     check_route(); check_tiers(); check_effort_clamp(); check_lanes(); check_needs(); check_default_features()
     check_probe_fallback()
@@ -1561,4 +1572,5 @@ if __name__ == "__main__":
     check_fallback_missing_id()
     check_fallback_dead_resolved()
     check_discovery_failure_names_family()
+    check_failed_comma_list()
     print("selftest OK")
