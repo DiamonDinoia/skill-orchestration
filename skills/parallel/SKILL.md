@@ -1,13 +1,13 @@
 ---
 name: parallel
-description: Use when the user holds an approved spec with units on disjoint files. A bare "run in parallel" request goes to spec first. Runs every wave of the spec in one run.
+description: Use when the user holds an approved spec with units on disjoint files. A bare "run in parallel" request goes to spec first. Runs every unit of the spec in one run.
 license: MIT
 version: 2.0.0
 ---
 
 # Parallel
 
-Run an approved spec as waves of units on disjoint file sets. No spec, no wave.
+Run an approved spec as units on disjoint file sets. No spec, no dispatch.
 
 Core rules T1-T6, P1, D1 live in the manager skill and bind this skill. This skill never restates them.
 
@@ -24,7 +24,7 @@ If two units name one file, merge them and re-check. Unowned files are gaps, not
 
 ## Dispatch and report
 
-Dispatch one wave per message, concurrently within each wave. Start each wave when every dependency of its units is done. Each prompt carries the unit definition verbatim plus the report contract. During the wave, prepare integration; read no unit output.
+Dispatch each unit as soon as all of its own dependencies are done, the `dag.py ready` semantics of skill `manager`. Start every independent unit at once (P1). Each prompt carries the unit definition verbatim plus the report contract. While units run, prepare integration; read no unit output.
 
 Report contract: each report obeys the report rules in skill `manager`, references/child-rules.md. The outcome is `done`, `blocked`, `partial`, or `UNRUN: <reason>`. Partial names what is left and why.
 
@@ -37,4 +37,4 @@ Report contract: each report obeys the report rules in skill `manager`, referenc
 
 ## Computing waves
 
-Compute the waves with `python3 scripts/waves.py plan.json` from this skill directory. The plan shape, one example and the exit codes live in skill `parallel`, references/waves.md. Senior and principal take `(critical)` units.
+Compute the waves with `python3 scripts/waves.py plan.json` from this skill directory. The waves output is a plan view only. It never delays a ready unit; dispatch obeys the rule above. The plan shape, one example and the exit codes live in skill `parallel`, references/waves.md. Senior and principal take `(critical)` units.

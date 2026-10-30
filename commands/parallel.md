@@ -1,5 +1,5 @@
 ---
-description: Split an approved spec with disjoint units into dispatch waves
+description: Split an approved spec with disjoint units into a dependency plan
 argument-hint: "[work]"
 ---
 

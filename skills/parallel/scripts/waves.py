@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turn a parallel-skill plan into dispatch waves, a critical path and tier hints.
+"""Turn a parallel-skill plan into wave groups (a plan view), a critical path and tier hints.
 
 Usage: waves.py plan.json | waves.py --selftest
 
@@ -95,7 +95,7 @@ def find_cycle(depends):
 
 
 def compute_waves(depends):
-    """Group units into waves that become ready together."""
+    """Group units into waves by dependency depth; a plan view, not a dispatch barrier."""
     sorter = TopologicalSorter(depends)
     sorter.prepare()
     waves = []
