@@ -85,12 +85,38 @@ check "manual symlinks" bash -c \
   "mkdir -p '$manual/.claude/skills' && for s in $SKILLS; do ln -s '$repo/skills/'\$s '$manual/.claude/skills/'\$s; done"
 check "manual skills on disk (all 5)" on_disk5 "$manual/.claude/skills"
 
-# The opencode helper script links only opencode's own directories.
-check "install-opencode.sh runs" bash "$repo/install-opencode.sh"
-check "install-opencode.sh: 5 opencode skills" on_disk5 ~/.config/opencode/skills
-check "install-opencode.sh: 5 commands + 4 tier agents" bash -c \
-  'for c in manager team brainstorm spec parallel; do [ -e ~/.config/opencode/commands/$c.md ] || exit 1; done &&
-   for t in intern junior senior principal; do [ -e ~/.config/opencode/agents/$t.md ] || exit 1; done'
+# The INSTALL.md link steps, walked for OpenCode and Hermes in a fresh home. Each
+# link runs the INSTALL.md steps: realpath source, test -L before readlink,
+# mkdir -p of the missing parent only, ln -sTn, then the verify pair.
+walk_link() { # source, link name
+  local src=$1 dst=$2 parent
+  src=$(realpath "$1") || return 1
+  case $src in /*) ;; *) return 1 ;; esac
+  if [ -L "$dst" ]; then
+    [ "$(readlink -f "$dst")" = "$src" ] && [ -e "$dst" ] && return 0
+    echo "occupied: $dst"; return 1
+  fi
+  if [ -e "$dst" ]; then echo "occupied: $dst"; return 1; fi
+  parent=$(dirname "$dst")
+  [ -d "$parent" ] || mkdir -p "$parent" || return 1
+  ln -sTn "$src" "$dst" || return 1
+  [ "$(readlink -f "$dst")" = "$src" ] && [ -e "$dst" ]
+}
+walk_links() {
+  local home s t
+  home=$(mktemp -d) || return 1
+  for s in manager team brainstorm spec parallel tiered-subagent-dispatch; do
+    walk_link "$repo/skills/$s" "$home/.config/opencode/skills/$s" || return 1
+    walk_link "$repo/skills/$s" "$home/.hermes/skills/$s" || return 1
+  done
+  for s in manager team brainstorm spec parallel; do
+    walk_link "$repo/.opencode/command/$s.md" "$home/.config/opencode/commands/$s.md" || return 1
+  done
+  for t in intern junior senior principal; do
+    walk_link "$repo/.opencode/agents/$t.md" "$home/.config/opencode/agents/$t.md" || return 1
+  done
+}
+check "INSTALL.md link walk (opencode + hermes)" walk_links
 
 # The parallel wave scheduler ships inside the plugin and self-tests from the installed copy.
 waves=$(find ~/.claude/plugins -path "*skills/parallel/scripts/waves.py" | head -1)

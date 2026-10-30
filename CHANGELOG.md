@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.1.0
+- Install is agent-led: `INSTALL.md` detects the environment, asks one batched question round with detected defaults, shows the plan, waits for approval, acts, verifies and reports.
+- The install links all six skills into OpenCode and Hermes. OpenCode keeps the link route even though its CLI has a `plugin` subcommand.
+- No backups in the install. An occupied target stops the run and the report names the path.
+- `install-opencode.sh` is gone; its missing sixth skill and missing `--help` go with it.
+- Update and uninstall sections: `git pull` in the clone or the marketplace update; remove only links that resolve into the clone.
+- Tests: `tests/test_docs.py` pins every install rule and fails when a rule is removed. `test/install.sh` walks the link steps in the container.
+- Version fields are 2.1.0 in every manifest and skill.
+
 ## 2.0.0
 
 - Round budget: one build, one review, at most one fix round, one re-check of the fixed findings only (rules T1-T6 in skill `manager`, SKILL.md). Then ship with documented limits or ask the user.

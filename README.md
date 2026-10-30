@@ -25,19 +25,23 @@ rule-only harnesses have no session hook and keep their own defaults.
 
 ## Install
 
+Tell your agent: Follow INSTALL.md in <clone>
+
+The agent detects the environment, asks one batched question round with detected defaults, shows
+the plan, acts after approval, verifies and reports. The plugin routes also work by hand:
+
 | Harness | Command |
 |---|---|
 | Claude Code | `claude plugin marketplace add DiamonDinoia/skill-orchestration && claude plugin install orchestration@orchestration --scope user` |
 | Codex CLI | `codex plugin marketplace add DiamonDinoia/skill-orchestration`, then `codex plugin add orchestration@orchestration` |
 | Gemini CLI | `gemini extensions install https://github.com/DiamonDinoia/skill-orchestration --consent` |
-| opencode (by hand, scripted) | `git clone https://github.com/DiamonDinoia/skill-orchestration && ./skill-orchestration/install-opencode.sh` |
-| by hand (symlink) | `git clone https://github.com/DiamonDinoia/skill-orchestration && for s in manager team brainstorm spec parallel; do ln -s "$PWD/skill-orchestration/skills/$s" ~/.claude/skills/$s; done` |
 
 The three harnesses with a native manifest carry one in this repository: `.claude-plugin/` for
-Claude Code, `.codex-plugin/` for Codex, and `gemini-extension.json` for Gemini CLI. opencode has
-no plugin system. `install-opencode.sh` links the five generic skills, the five command shims and the
-tier agents from a checkout; anything else: symlink by hand (last row). The last row covers the five
-generic skills; `tiered-subagent-dispatch` is Hermes-only: link it into `~/.hermes/skills/` by hand.
+Claude Code, `.codex-plugin/` for Codex, and `gemini-extension.json` for Gemini CLI.
+OpenCode has a `plugin` subcommand, but this repository keeps the link route for it:
+`INSTALL.md` links the six skills, the five command shims and the four tier agents into
+`${XDG_CONFIG_HOME:-$HOME/.config}/opencode/`. Hermes takes links into `${HERMES_HOME:-$HOME/.hermes}/skills`.
+`tiered-subagent-dispatch` runs the delegation ladder in Hermes and links wherever the user asks.
 
 Rule-only harnesses (Cursor rules, Cline, Windsurf, Kiro, Qoder, Grok, Devin, ...) receive the
 manager rule copy. The other skills orchestrate subagents, which those harnesses lack.
@@ -61,12 +65,14 @@ the name check. It also runs `skills/parallel/scripts/waves.py --selftest` from 
 test/run.sh   # podman, or: test/run.sh docker
 ```
 
-## Version 2.0.0
+## Version 2.1.0
 
-Every loop ends after one review, one fix round and one re-check of the fixed findings (rules
-T1-T6 in skill `manager`, SKILL.md). Parallel fan-out starts every independent unit at once (P1).
-Divide and conquer splits work into leaves for the cheap tiers (D1). The manager core is short and
-its references load on trigger, so `AGENTS.md` carries only the core. `dag.py` adds `add` and `plan`.
+Install is agent-led: `INSTALL.md` detects the environment, asks one batched question round with
+detected defaults, shows the plan, waits for approval, acts, verifies and reports. Every loop ends
+after one review, one fix round and one re-check of the fixed findings (rules T1-T6 in skill
+`manager`, SKILL.md). Parallel fan-out starts every independent unit at once (P1). Divide and
+conquer splits work into leaves for the cheap tiers (D1). The manager core is short and its
+references load on trigger, so `AGENTS.md` carries only the core. `dag.py` adds `add` and `plan`.
 `CHANGELOG.md` lists every change.
 
 ## License

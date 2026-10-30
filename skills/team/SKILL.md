@@ -3,7 +3,7 @@ name: team
 description: "Use when the user runs /team or asks for round-based multi-agent execution of one task. The manager splits, critics attack, engineers build in worktrees, reviewers check, the manager merges."
 disable-model-invocation: true
 argument-hint: "[interview|plan|execute|review]"
-version: 2.0.0
+version: 2.1.0
 ---
 
 # Team

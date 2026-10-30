@@ -32,6 +32,9 @@ if ! grep -q '^FAIL frontmatter name/description' <<<"$log" || grep -qiE 'EACCES
 fi
 echo "control PASSED: the broken skill failed on the name check"
 
+echo "== install doc pins"
+python3 "$root/tests/test_docs.py"
+
 echo "== dag.py regression tests"
 bash "$root/test/test-dag.sh"
 

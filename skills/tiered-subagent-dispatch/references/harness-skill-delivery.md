@@ -17,7 +17,7 @@ Owned skills (`DiamonDinoia/skill-*`) come from each harness's marketplace, neve
 
 - Hermes: `hermes skills update <name>`, or `hermes skills install DiamonDinoia/<repo>/<skill> --force --yes`. A pinned skills.sh install command reinstalls the old text.
 - Claude Code / Codex: update the plugin from its marketplace, then check the version in the plugin list.
-- opencode: the installer cache `~/.cache/opencode-skills/<repo>` must be a real `git clone`; update with `git -C <cache> pull && <cache>/install-opencode.sh`. A hand-copied cache cannot update; move it to the attic and clone again instead of adding installer options.
+- opencode: the clone `~/.cache/opencode-skills/<repo>` must be a real `git clone`; update with `git -C <cache> pull`, then re-run the verify step of `INSTALL.md`. A hand-copied clone cannot update; move it to the attic and clone again instead of adding installer options.
 
 Installed Hermes copies carry `metadata: github-*` frontmatter added by the installer: that is install metadata, not
 a local change, so it is never upstreamed.
