@@ -3,15 +3,14 @@
 
   hermes-dispatch-route status [--refresh]           flatiron health + resolved latest Claude/OpenAI ids
   hermes-dispatch-route pick KIND [--tier T] [--failed MODEL ...] [--needs F[,F...]] [--refresh]
-                                                     -> JSON {provider, model, reason, flags}
+                                                     -> JSON {provider, model, reason, flags, skipped}
   hermes-dispatch-route lanes KIND [--tier T] [--needs F[,F...]] [--failed M[,...]]
                                                      -> JSON line: every eligible flatiron lane, one
                                                         "{fallback: true}" entry when none fits
   hermes-dispatch-route assign NODE=KIND:TIER[:NEED,NEED] ...
                                                      -> JSON list, one entry per node: the eligible
                                                         flatiron model with the fewest in-flight jobs
-                                                        under its capacity (ties in pick order), so one
-                                                        batch spreads out; all full, the most capacity left
+                                                        (ties in pick order), so one batch spreads out
   hermes-dispatch-route latest opus|sonnet|sol|haiku -> bare model id
   hermes-dispatch-route models [--refresh]           every gateway model: health, rank hint, kinds, new
   hermes-dispatch-route sync [--refresh]             write discovered ids into Hermes config
@@ -28,8 +27,8 @@ ROUTING_FILE "features" map: features[model] = {vision, web, probed}; --needs F 
 named feature true (a model with no entry has no features; `pick vision` means `--needs vision`).
 The Claude rungs read features[haiku|sonnet|opus] through the same filter (built-in defaults when the json lacks the key).
 Flags: --reasoning EFFORT only on a flatiron pick, clamped to the efforts the model accepts (efforts map in ROUTING_FILE); -s SKILL per tier skill on every pick.
-Ranks, per-kind preferences, per-model capacity and tiers live in ROUTING_FILE (JSON) so they can be tuned without editing code.
-capacity[model] is the parallel job count (default 1); a full model is skipped while another has room.
+Ranks, per-kind preferences and tiers live in ROUTING_FILE (JSON) so they can be tuned without editing code.
+No per-model job cap: a model takes every parallel job that fits its eligibility, and `assign` spreads a batch by the in-flight count.
 The old key principal_min_rank is removed and ignored: principal is the top 3 rank values of the
 listed models, and a model the gateway lists no more drops out of the rank map after 7 days.
 """
@@ -376,16 +375,7 @@ def pick(kind, tier, failed, refresh, needs=None):
     floor = max((cfg["rank"].get(m, 0) for m in failed if m in cfg["rank"]), default=0)
     skipped = []
     skill_flags = "".join(f" -s {s}" for s in tcfg.get("skills", []))
-    counts = inflight_counts()
-    full, m = [], None
-    for cand in flatiron_lanes(kind, tier, failed, needs, cfg, health, skipped):
-        if counts.get(cand, 0) < _capacity(cfg, cand):
-            m = cand  # first eligible model with free capacity, pick order
-            break
-        skipped.append(f"{cand}: at capacity")
-        full.append(cand)
-    if m is None and full:  # all full: still a flatiron pick, never the ladder for capacity alone
-        m = _overflow(full, counts, cfg)
+    m = next(iter(flatiron_lanes(kind, tier, failed, needs, cfg, health, skipped)), None)
     if m is not None:
         led_fb = _ledger_fb_note(skipped)
         return {"provider": "flatiron", "model": m,
@@ -491,24 +481,11 @@ def inflight_counts():
     return counts
 
 
-def _capacity(cfg, m):
-    """Parallel jobs one flatiron model takes: the ROUTING_FILE capacity map, default 1."""
-    return (cfg.get("capacity") or {}).get(m, 1)
-
-
-def _overflow(el, counts, cfg):
-    """Every eligible model at capacity: the most capacity left counting overflow, ties to the
-    higher-capacity model first (the user rule: the multi-instance model takes several jobs)."""
-    return max(el, key=lambda m: (_capacity(cfg, m) - counts.get(m, 0), _capacity(cfg, m)))
-
-
 def assign(specs):
     """Load-balanced batch pick: every node takes its eligible model with the fewest in-flight
-    jobs under its capacity (ties in pick order) and raises that model's running count before the
-    next node, so one batch spreads over the eligible set. A model at capacity is skipped. Every
-    eligible model full: the node takes the most capacity left counting overflow (the
-    multi-instance model first), never the fallback ladder. A node with no eligible model gets the
-    fallback rung."""
+    jobs (ties in pick order) and raises that model's running count before the next node, so one
+    batch spreads over the eligible set. No model cap: a model serves every node that fits its
+    eligibility. A node with no eligible model gets the fallback rung."""
     counts = inflight_counts()
     out = []
     for node, kind, tier, needs in specs:
@@ -517,13 +494,8 @@ def assign(specs):
         sk = []
         el = list(flatiron_lanes(kind, tier, [], needs, cfg, health, sk))
         if el:
-            free = [x for x in el if counts.get(x, 0) < _capacity(cfg, x)]
-            if free:
-                m = min(free, key=lambda x: counts.get(x, 0))  # ties go to pick order because min is stable
-                reason = f"least in-flight of {len(el)} eligible flatiron model{'' if len(el) == 1 else 's'} for {kind}"
-            else:
-                m = _overflow(el, counts, cfg)
-                reason = f"every eligible model at capacity; most capacity left of {len(el)} for {kind}"
+            m = min(el, key=lambda x: counts.get(x, 0))  # ties go to pick order because min is stable
+            reason = f"least in-flight of {len(el)} eligible flatiron model{'' if len(el) == 1 else 's'} for {kind}"
             reason += _ledger_fb_note(sk)
             load = counts.get(m, 0)
             counts[m] = load + 1

@@ -12,13 +12,13 @@ The harness has two parts: a fake CLI per external tool, and dead proxy env vars
    exit 99
    ```
    `chmod +x` it.
-3. Positive control BEFORE the real run: `env PATH=<harness>/bin:/usr/bin:/bin gh api probe; echo "exit=$?"` must print exit=99 and the log must hold the argv line. Then delete the log. A harness with no positive control proves nothing: the code can reach the real tool and the absence of log lines is uninformative.
+3. One positive control per harness dir, before its first real run: `env PATH=<harness>/bin:/usr/bin:/bin gh api probe; echo "exit=$?"` must print exit=99 and the log must hold the argv line. Then delete the log. A harness with no positive control proves nothing: the code can reach the real tool and the absence of log lines is uninformative.
 4. Run the suite with the harness on PATH and all four proxy spellings dead-ended:
    ```
    env PATH=<harness>/bin:/usr/bin:/bin HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 http_proxy=http://127.0.0.1:9 python3 <suite> selftest; echo "exit=$?"
    ```
    The PASS condition is the suite's own marker line AND the fake-tool log file does not exist afterwards. Absent log = no stubbed tool was called. A passed suite WITH log lines means the stubs in the code do not intercept the real calls.
-5. Mutations run under the same harness. One mutation per guard: remove the guard, the suite must FAIL (quote the first FAIL line), restore, confirm the tree is clean (`git diff --stat` empty) before the next mutation.
+5. Mutations run under the same harness. One mutation per fix: remove the guard, the suite must FAIL (quote the first FAIL line). Restore, and confirm the tree is clean (`git diff --stat` empty) before the round closes.
 6. Instrumented live runs are the complement: wrap the subprocess/exec and http layers in Python, run against the real network, and record every method and argv. A read-only mode (dry-run) must record only GETs and read-only CLI subcommands.
 
 Pitfalls:

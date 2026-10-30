@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Print one status line per delegate_task transcript every 10 minutes.
 
-Run as terminal(background=true, heartbeat=600). Logs idle > 20 min are STALLED.
-DONE lines print once. Stops after 4 h; relaunch if work runs longer.
+Usage: agent-monitor.py [--help]
+
+Logs idle > 20 min are STALLED. DONE lines print once.
+Stops after 4 h; relaunch if work runs longer.
 """
 import glob, os, sys, time
+
+if "-h" in sys.argv or "--help" in sys.argv:
+    print(__doc__)
+    sys.exit(0)
 
 LIVE = os.path.expanduser("~/.hermes/cache/delegation/live")
 end = time.time() + 4 * 3600

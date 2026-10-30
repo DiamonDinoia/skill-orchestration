@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Offline self-check for hermes-dispatch-route and hermes-adversarial-review. No network, no models.
-Run: python3 ~/.hermes/skills/autonomous-ai-agents/tiered-subagent-dispatch/scripts/selftest.py"""
+Run: python3 scripts/selftest.py"""
 import contextlib, fcntl, importlib.machinery, importlib.util, io, json, os, subprocess, sys, tempfile, time, types
 from pathlib import Path
 
@@ -1043,46 +1043,46 @@ def check_assign():
 
 
 def check_assign_capacity():
+    # the capacity map is gone: a model serves every node, no skip and no serialization
     r = load("hermes-dispatch-route")
     r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9", "haiku": "claude-haiku-9", "sol": "x"}
     cfg = {"rank": {"s/One": 3, "q/Qwen": 2, "s/Two": 1}, "tiers": json.loads(r.ROUTING_FILE.read_text())["tiers"],
            "routes": {"mechanical": ["s/One", "q/Qwen", "s/Two"]},
-           "capacity": {"q/Qwen": 4}, "features": {}}
+           "capacity": {"q/Qwen": 4, "s/One": 1, "s/Two": 1}, "features": {}}
     r.routing = lambda: cfg
     r.flatiron_status = lambda *a: {m: {"ok": True} for m in ("s/One", "q/Qwen", "s/Two")}
     r.inflight_counts = lambda: {}
     out = r.assign([(f"n{i}", "mechanical", "senior", []) for i in range(1, 6)])
     models = [o["model"] for o in out]
-    # 5 nodes, multi-instance q/Qwen (capacity 4) and two single-instance models: one node per
-    # single-instance model, the rest on q/Qwen
-    assert models == ["s/One", "q/Qwen", "s/Two", "q/Qwen", "q/Qwen"], out
-    assert models.count("s/One") <= 1 and models.count("s/Two") <= 1, out
+    # 5 nodes spread over 3 models by in-flight count; the leftover capacity key is ignored
+    assert models == ["s/One", "q/Qwen", "s/Two", "s/One", "q/Qwen"], out
+    assert [o["load"] for o in out] == [0, 0, 0, 1, 1], out
     assert all(o["provider"] == "flatiron" and o["fallback"] is False for o in out), out
     assert all(o["kind"] == "mechanical" and o["reason"] for o in out), out
+    # a live count above every old cap never skips the model and never reaches the ladder
+    r.inflight_counts = lambda: {"s/One": 9, "q/Qwen": 9, "s/Two": 9}
+    out = r.assign([("n1", "mechanical", "senior", [])])
+    assert out[0]["model"] == "s/One" and out[0]["fallback"] is False, out
 
 
 def check_assign_capacity_inflight():
+    # assign spreads by in-flight count only: the least busy model serves, ties to pick order
     r = load("hermes-dispatch-route")
     r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9", "haiku": "claude-haiku-9", "sol": "x"}
     cfg = {"rank": {"s/One": 3, "q/Qwen": 2}, "tiers": json.loads(r.ROUTING_FILE.read_text())["tiers"],
-           "routes": {"mechanical": ["s/One", "q/Qwen"]},
-           "capacity": {"q/Qwen": 4}, "features": {}}
+           "routes": {"mechanical": ["s/One", "q/Qwen"]}, "features": {}}
     r.routing = lambda: cfg
     r.flatiron_status = lambda *a: {m: {"ok": True} for m in ("s/One", "q/Qwen")}
-    # a live in-flight job on the single-instance model makes assign skip it
-    r.inflight_counts = lambda: {"s/One": 1, "q/Qwen": 3}
+    r.inflight_counts = lambda: {"s/One": 3, "q/Qwen": 1}
     out = r.assign([("n1", "mechanical", "senior", [])])
-    assert out[0]["model"] == "q/Qwen" and out[0]["fallback"] is False, out
-    # every eligible model full: the most capacity left counting overflow (the multi-instance
-    # model wins ties), never the fallback ladder
-    r.inflight_counts = lambda: {"s/One": 1, "q/Qwen": 4}
-    out = r.assign([("n1", "mechanical", "senior", [])])
-    assert out[0]["model"] == "q/Qwen" and out[0]["provider"] == "flatiron" and out[0]["fallback"] is False, out
-    assert out[0]["reason"].startswith("every eligible model at capacity"), out
-    # pick for one node prefers a model with free capacity
-    r.inflight_counts = lambda: {"s/One": 1, "q/Qwen": 3}
+    assert out[0]["model"] == "q/Qwen" and out[0]["load"] == 1, out
+    r.inflight_counts = lambda: {"s/One": 1, "q/Qwen": 1}
+    out = r.assign([("n1", "mechanical", "senior", []), ("n2", "mechanical", "senior", [])])
+    assert [o["model"] for o in out] == ["s/One", "q/Qwen"], out
+    # pick for one node takes the first eligible model in pick order, whatever the in-flight counts
+    r.inflight_counts = lambda: {"s/One": 9, "q/Qwen": 0}
     got = r.pick("mechanical", "senior", [], False)
-    assert got["model"] == "q/Qwen", got
+    assert got["model"] == "s/One", got
 
 
 def check_prefer_cheapest():
@@ -1414,12 +1414,11 @@ def check_sync_pin_effort_clamp():
 
 
 QWEN, MIST, KIMI = "Qwen/Qwen3.8-27B-FP8", "mistralai/Mistral-Medium-3.5-128B", "moonshotai/Kimi-K3"
-# One fixture table for the CLI cases: flatiron trio, intern and senior tiers, generous capacity
-# so a real in-flight job on this machine never moves the pick.
+# One fixture table for the CLI cases: flatiron trio, intern and senior tiers. pick reads no
+# in-flight counts, so a real job on this machine never moves it.
 _CLI_TABLE = json.dumps({
     "rank": {QWEN: 5, MIST: 4, KIMI: 3},
     "routes": {"mechanical": [MIST, QWEN, KIMI], "code": [MIST, QWEN, KIMI]},
-    "capacity": {QWEN: 9, MIST: 9, KIMI: 9},
     "tiers": {"intern": {"reasoning_effort": "low", "skills": [], "fallback": ["haiku", "sonnet"]},
               "senior": {"reasoning_effort": "high", "skills": [], "fallback": ["sonnet"]}},
     "features": {}})

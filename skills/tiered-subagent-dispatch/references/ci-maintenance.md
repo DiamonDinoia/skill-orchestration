@@ -5,7 +5,7 @@
 - Actions go to the latest release by tag. Keep the repo's own convention: when the repo pins tags, never pin a sha.
 - Languages go to the latest stable release (Python, Node). Toolchains pin the current stable line, not a trunk/dev line (LLVM: `CURRENT_LLVM_STABLE` in apt.llvm.org `llvm.sh`).
 - Runners pin a versioned image (`ubuntu-24.04`, `macos-15`, `windows-2022`), never `*-latest`. A `-latest` label moves to a new OS on GitHub's date and can break a distro-specific repo (apt.llvm.org `noble` packages on a newer Ubuntu). Pick the version that the repo's apt sources and sibling repos already use.
-- pre-commit hooks: when the new rev reformats tracked files, make two commits. First apply the hooks at the OLD revs (format only, no hand edits). Then bump the revs and commit their rewrites with the bump. Check `pre-commit run --all-files` exits 0 twice in a row.
+- pre-commit hooks: when the new rev reformats tracked files, make two commits. First apply the hooks at the OLD revs (format only, no hand edits). Then bump the revs and commit their rewrites with the bump. Check `pre-commit run --all-files` exits 0. Run it a second time only when the first run rewrote files.
 - One PR per repo, merged by `scripts/merge-when-green.py` when CI is green.
 
 ## Publishing from CI

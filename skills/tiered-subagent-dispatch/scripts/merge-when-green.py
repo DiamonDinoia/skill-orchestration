@@ -13,6 +13,9 @@ import subprocess
 import sys
 import time
 
+if len(sys.argv) != 3 or any(a in ("-h", "--help") for a in sys.argv[1:]):
+    print(__doc__)
+    sys.exit(0)
 repo, pr = sys.argv[1], sys.argv[2]
 OK = {"success", "skipped", "neutral"}
 rerun = set()

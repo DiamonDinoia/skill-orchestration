@@ -4,19 +4,19 @@ These are the rules the manager adds to every brief once children start launchin
 
 ## Leftover state before redo
 
-Any work an agent could have half-done deserves a step 0 before the redo:
+Any work an agent could have half-done deserves a step 0 before the redo. Inventory only the paths the redo will touch:
 
-- `git status --short`, `git log --oneline -2` in every repo the work touched.
+- `git status --short`, `git log --oneline -2` in each repo the redo will touch.
 - `ls -la` of the scratch dir the previous run owned.
 - `ps -p <pid>` for any background process the earlier run reported starting (a child exit kills its own `terminal(background=true)` children, but a nested `hermes chat` it launched directly may still run).
-- A `delegate_task` steer lands at the child's NEXT tool result, never mid-call. For an urgent reversal (drop a wrong lane), if the steer cannot take effect before the current tool call ends, stop it and re-dispatch with a fresh self-contained brief; steering alone strands the in-flight call on the old course.
+- See the steer entry in SKILL.md's Pitfalls for steer delivery timing. Reach the worker with a steer before it folds a user style decision. For an urgent reversal (drop a wrong lane), stop the child and re-dispatch with a fresh self-contained brief. Steering alone strands the in-flight call on the old course.
 - Reuse whatever is found; escalate rather than discard partial work blindly.
 
 A child that is interrupted, timed out, or killed may have committed part of a multi-deliverable fix. The redo brief names what it finds and what to keep.
 
-A command whose payload pipe loses tails (`cmd | tail -30; echo exit=$?`) reports the exit of `tail` as the payload's, and `2>/dev/null | tail -30` hides the load error that the stderr would have shown. The right form: `cmd > log 2>&1; echo "exit=$?" >> log`, then read the log.
+Exit-code capture and the trailing-echo rule live in `references/report-evidence-pitfalls.md`. Use its capture form for every build, test and sweep run.
 
-A background-process notice's Output preview is the tail of the last stdout write; a redirect to a log hides the real output for a `> log 2>&1` command, and the `exit=0` at the tail of the preview is the site of the `echo`, not the payload's. The Manager's on each notice cites the log's `exit=` line and names the step, else treats the notice as unread.
+A background-process notice's Output preview is the tail of the last stdout write. A redirect to a log hides the real output for a `> log 2>&1` command. Its exit code follows the trailing-echo rule in `references/report-evidence-pitfalls.md`.
 
 ## A child owns its own background processes
 
@@ -31,22 +31,24 @@ A background-process notice's Output preview is the tail of the last stdout writ
 A background-process completion notice carries the stdout tail of the last command; for piped commands that can be the pipe's tail (empty or garbled), not the verdict. Rules:
 
 - The notice never counts as evidence by itself. Before taking the next step, read the command's log file with read_file.
-- The manager replies to each notice in one line: what step of which child it belongs to, why that exit code is not the verdict (the header reports the trailing echo), and who reads the log. Silence on alerts invites the user to ask whether something is hanging; a full re-report of the child wastes context.
-- If the log is missing or truncated, redo the check; do not infer a verdict from the notice alone.
-- A terminal completion notice's `exit_code` field reports the trailing `echo "exit=$?"` (usually 0), never the payload. The real result lives in the log file's `exit=` line.
+- The manager replies to each notice in one line: what step of which child it belongs to and who reads the log. The line also says why that exit code is not the verdict. Silence on alerts invites the user to ask whether something is hanging; a full re-report of the child wastes context.
+- If the log is missing or truncated, report the step as unknown. Never infer a verdict from the notice alone.
+- The notice `exit_code` field follows the trailing-echo rule in `references/report-evidence-pitfalls.md`.
 
 ## A rerun storm with edits between reruns is progress, not a loop
 
-A stream of near-identical completion notices from one child (six probe reruns in a row) does not by itself mean the child is stuck. Before calling it hung, dispatch a cheap read-only inspector that compares three things: edits between reruns (progressing), identical reruns with no edits (looping), and liveness of the tool processes (running / not running / unknown). It also answers the question on the manager's mind (here: is it hanging) instead of only relaying state. A build that failed and sits mid poll cycle reads as stale transcript, not as hung; the inspector names the poll cadence instead of declaring a hang.
+A stream of near-identical completion notices from one child (six probe reruns in a row) does not by itself mean the child is stuck. When the transcript shows edits between reruns, trust the two-check stop of SKILL.md's Monitor cadence rule and dispatch no child. Dispatch a cheap read-only inspector only for identical reruns with no edits. It compares edits between reruns, liveness of the tool processes (running / not running / unknown), and answers whether the child hangs. A build that failed and sits mid poll cycle reads as stale transcript, not as hung. The inspector names the poll cadence instead of declaring a hang.
 
 ## Stopping a stale job chain
 
-User signals "too long", "kill", "wait / slow down" stop the running job before its deadline: give the user first what the stop leaves (commits, branch, leftover processes, what is left to do), then stop and assess. Signals there as plain as a number question or a capitalized "STOP": the manager restates them in one line, then stops the sa chain.
+User signals "too long", "kill", "wait / slow down" stop the running job before its deadline. First give the user what the stop leaves: commits, branch, leftover processes, what is left to do. Then stop and assess. A signal can be as plain as a number question or a capitalized "STOP". The manager restates it in one line, then stops the job chain.
 
 A `delegate_task` stop arrives at the child's next iteration boundary, not its current tool call: an in-flight `hermes chat` session writes to a stopped brief after it. The follow-up that takes the job kills the child's `hermes chat` processes and Playwright children by `ps -eo pid,etime,args | grep -a -e 'hermes chat' -e playwright -e 'http.server'` before a snapshot: grep the args for the worktree, not the process name, and leave the user's own systemd units and the jobs of other batches alone.
 
-The assess step is read-only: snapshot (`git status --short`, `git log --oneline` from the last known-good tip, `git diff --stat`), save an uncommitted diff to a scratch patch, run the checks as they are, and map every open requirement to file:line plus the test that covers it as in / partial / missing. An assess report has the ended state of the stopped job, not the new plan. On it the next dispatches run, and the stop counts as assessed only when the report names a sha, gives test counts, and lists the leftover processes it killed.
+The assess step is read-only. Snapshot (`git status --short`, `git log --oneline` from the last known-good tip, `git diff --stat`) and save an uncommitted diff to a scratch patch. Run the checks as they are. Map every open requirement to file:line plus the test that covers it as in / partial / missing. One assess report covers a whole stopped batch, not one per stopped child. The report has the ended state of the stopped job, not the new plan. On it the next dispatches run. The stop counts as assessed only when the report names a sha, gives test counts, and lists the leftover processes it killed.
 
 ## When a batch is interrupted en masse
 
 A distributed kill (workflow abort, harness restart, or OOM) hits every child in the batch at once. Before restarting look for `git reset --soft`, `git rebase`, or `git merge` left in progress, and any worktrees the batch used; a worktree still on disk means the work survived. Re-dispatch with the same briefs and let each child's step 0 absorb it.
+
+An interrupted turn is the same kill for its in-flight `delegate_task` children (`status=interrupted`, partial work in scratch). Take over with a fresh child whose first step is read-only state discovery of the paths the redo will touch. Never trust a partial output row as progress.
