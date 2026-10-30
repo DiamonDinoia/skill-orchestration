@@ -61,6 +61,14 @@ the name check. It also runs `skills/parallel/scripts/waves.py --selftest` from 
 test/run.sh   # podman, or: test/run.sh docker
 ```
 
+## Version 2.0.0
+
+Every loop ends after one review, one fix round and one re-check of the fixed findings (rules
+T1-T6 in skill `manager`, SKILL.md). Parallel fan-out starts every independent unit at once (P1).
+Divide and conquer splits work into leaves for the cheap tiers (D1). The manager core is short and
+its references load on trigger, so `AGENTS.md` carries only the core. `dag.py` adds `add` and `plan`.
+`CHANGELOG.md` lists every change.
+
 ## License
 
 MIT.

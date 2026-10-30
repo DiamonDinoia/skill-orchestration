@@ -31,3 +31,21 @@ if ! grep -q '^FAIL frontmatter name/description' <<<"$log" || grep -qiE 'EACCES
   echo "control FAILED: the run failed, but not on the invalid name"; exit 1
 fi
 echo "control PASSED: the broken skill failed on the name check"
+
+echo "== dag.py regression tests"
+bash "$root/test/test-dag.sh"
+
+echo "== pi-extension tests"
+if command -v node >/dev/null 2>&1; then
+  (cd "$root/pi-extension" && node --test ./test/*.test.js)
+else
+  echo "SKIP: node not installed, pi-extension tests not run"
+fi
+
+echo "== generated rule copies match skills/manager/SKILL.md"
+bash "$root/scripts/build-rules.sh"
+if [ -n "$(git -C "$root" status --short)" ]; then
+  git -C "$root" status --short
+  echo "FAIL: the tree is not clean after scripts/build-rules.sh (generated copies out of sync?)"
+  exit 1
+fi
