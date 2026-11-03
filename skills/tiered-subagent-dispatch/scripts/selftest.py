@@ -1513,7 +1513,7 @@ def check_routing_null_list():
     """F4: a routing file whose top level is null or a list takes the built-in table and its
     warning instead of an AttributeError."""
     for raw in ("null", "[]"):
-        p = _cli(["pick", "code"], routing=raw)
+        p = _cli(["pick", "code", "--tier", "senior"], routing=raw)
         assert p.returncode == 0, (raw, p.stderr[-300:])
         assert "built-in table" in p.stderr, (raw, p.stderr)
         assert json.loads(p.stdout)["model"] == "fixture-sonnet", (raw, p.stdout)
