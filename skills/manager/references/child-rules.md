@@ -10,6 +10,7 @@ Shared rules:
 - End each command with `; echo "exit=$?"`.
 - Do not edit installed skills or memory.
 - Do not push without an approval from the user.
+- Write the report in English.
 
 Report rules:
 
