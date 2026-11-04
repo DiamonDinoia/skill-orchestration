@@ -125,7 +125,7 @@ If that command exits non-zero, stop and report.
 
 For each link in the plan, `readlink -f` of the link name equals the absolute source and `test -e` of the link name exits 0.
 For plugin routes the list output shows `orchestration`: `claude plugin list`, `codex plugin list`, `gemini extensions list`.
-Check the version line: `grep -h '"version"' "<clone>/.claude-plugin/plugin.json" "<clone>/.codex-plugin/plugin.json" "<clone>/gemini-extension.json"` prints `"version": "2.2.1"` and nothing else.
+Check the version line: `grep -h '"version"' "<clone>/.claude-plugin/plugin.json" "<clone>/.codex-plugin/plugin.json" "<clone>/gemini-extension.json"` prints `"version": "2.2.2"` and nothing else.
 
 ### 6. Report
 

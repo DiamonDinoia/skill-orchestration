@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.2.2
+- Routing: sync fallbacks stay in the quota-free pool (flatiron-only); unknown reasoning effort names warn and fall back instead of crashing.
+
 ## 2.2.1
 - Routing: reasoning effort rounds down to the highest accepted level at or below the request; it never rises above it.
 
