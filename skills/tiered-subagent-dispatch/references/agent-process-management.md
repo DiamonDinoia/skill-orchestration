@@ -4,9 +4,9 @@ These are the rules the manager adds to every brief once children start launchin
 
 ## Leftover state before redo
 
-Any work an agent could have half-done deserves a step 0 before the redo. Inventory only the paths the redo will touch:
+Any work an agent could have half-done deserves a step 0 before the redo. One intern child runs the inventory below, only on the paths the redo will touch:
 
-- `git status --short`, `git log --oneline -2` in each repo the redo will touch.
+- It runs `git status --short` and `git log --oneline -2` in each repo the redo will touch.
 - `ls -la` of the scratch dir the previous run owned.
 - `ps -p <pid>` for any background process the earlier run reported starting (a child exit kills its own `terminal(background=true)` children, but a nested `hermes chat` it launched directly may still run).
 - See the steer entry in SKILL.md's Pitfalls for steer delivery timing. Reach the worker with a steer before it folds a user style decision. For an urgent reversal (drop a wrong lane), stop the child and re-dispatch with a fresh self-contained brief. Steering alone strands the in-flight call on the old course.
@@ -45,7 +45,7 @@ User signals "too long", "kill", "wait / slow down" stop the running job before 
 
 A `delegate_task` stop arrives at the child's next iteration boundary, not its current tool call: an in-flight `hermes chat` session writes to a stopped brief after it. The follow-up that takes the job kills the child's `hermes chat` processes and Playwright children by `ps -eo pid,etime,args | grep -a -e 'hermes chat' -e playwright -e 'http.server'` before a snapshot: grep the args for the worktree, not the process name, and leave the user's own systemd units and the jobs of other batches alone.
 
-The assess step is read-only. Snapshot (`git status --short`, `git log --oneline` from the last known-good tip, `git diff --stat`) and save an uncommitted diff to a scratch patch. Run the checks as they are. Map every open requirement to file:line plus the test that covers it as in / partial / missing. One assess report covers a whole stopped batch, not one per stopped child. The report has the ended state of the stopped job, not the new plan. On it the next dispatches run. The stop counts as assessed only when the report names a sha, gives test counts, and lists the leftover processes it killed.
+One intern child runs the assess step, read-only. It snapshots (`git status --short`, `git log --oneline` from the last known-good tip, `git diff --stat`) and saves an uncommitted diff to a scratch patch. It runs the checks as they are. It maps every open requirement to file:line plus the test that covers it as in / partial / missing. One assess report covers a whole stopped batch, not one per stopped child. The report has the ended state of the stopped job, not the new plan. On it the next dispatches run. The stop counts as assessed only when the report names a sha, gives test counts, and lists the leftover processes it killed.
 
 ## When a batch is interrupted en masse
 
