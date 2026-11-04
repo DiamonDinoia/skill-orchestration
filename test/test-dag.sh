@@ -35,13 +35,13 @@ has() { # haystack needle desc
   esac
 }
 
-begin 1 "a missing tier is senior (S26)"
+begin 1 "a missing tier is intern (S26)"
 echo '{"nodes": {"a": {}}}' > "$g"
 run check
 is 0 "$code" "check exits 0"
 echo '{"nodes": {"a": {"state": "failed"}}}' > "$g"
 run escalate a
-is "a: senior -> principal" "$out" "escalate starts at senior"
+is "a: intern -> junior" "$out" "escalate starts at intern"
 end
 
 begin 2 "an invalid tier reports the value (S26)"
@@ -120,6 +120,13 @@ is 1 "$code" "a bad tier is refused"
 has "$err" "node d: invalid tier chief" "the check message names the node"
 is False "$("$PY" -c 'import json,sys; print("d" in json.load(open(sys.argv[1]))["nodes"])' "$g")" "a refused add writes nothing"
 is "$before" "$(cat "$g")" "graph unchanged by the refusals"
+end
+
+begin 9 "an untiered node is intern and escalates to junior"
+echo '{"nodes": {"a": {"state": "failed"}}}' > "$g"
+run escalate a
+is "a: intern -> junior" "$out" "escalate shows the untiered node as intern"
+is "junior" "$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["nodes"]["a"]["tier"])' "$g")" "escalate gives junior"
 end
 
 echo "== $case_pass cases passed, $case_bad failed; $assert_pass assertions passed, $assert_bad failed"

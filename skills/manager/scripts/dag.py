@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Schedule subagent dispatch. GRAPH: {"nodes": {"ID": {"deps": [], "files": [], "resources": [], "state": "todo", "tier": "junior"}}}.
 A '#' in a files entry separates the path from the symbol, so a filename that contains '#' cannot be named.
-Tiers: intern < junior < senior < principal; a node without a tier is senior. escalate retries a failed node one tier up.
+Tiers: intern < junior < senior < principal; a node without a tier is intern. escalate retries a failed node one tier up.
 States: todo, running, done, failed. Every command first rejects a graph that `check` rejects.
 Exit 0 ok, 1 invalid graph or refused move, 2 usage or filesystem. Stdlib only, python3 >= 3.9."""
 
@@ -166,7 +166,7 @@ def normalize(nodes):
         state = n.setdefault("state", "todo")
         if state not in STATES:
             raise TypeError(f"node {i}: bad state {state!r}")
-        n.setdefault("tier", "senior")
+        n.setdefault("tier", "intern")
     return nodes
 
 def selftest():
@@ -282,12 +282,12 @@ def selftest():
                and open(graph, "rb").read() == before, frag)
         write({"a": {}})
         res = run("check")
-        ok(res.returncode == 0 and res.stdout == "ok\n", "a missing tier defaults to senior")
+        ok(res.returncode == 0 and res.stdout == "ok\n", "a missing tier defaults to intern")
         write({"a": {"state": "failed"}})
         res = run("escalate", "a")
         got = json.load(open(graph, encoding="utf-8"))["nodes"]
-        ok(res.returncode == 0 and res.stdout == "a: senior -> principal\n" and got["a"]["tier"] == "principal",
-           "escalate of a missing-tier node starts at senior")
+        ok(res.returncode == 0 and res.stdout == "a: intern -> junior\n" and got["a"]["tier"] == "junior",
+           "escalate of a missing-tier node starts at intern")
         write({"nt": {"tier": "chief"}, "x": {"files": ["f"]}, "y": {"files": ["f"]}, "c": {"deps": ["d"]}, "d": {"deps": ["c"]}})
         res = run("check")
         ok(res.returncode == 1 and res.stderr.count("\n") == 3 and all(s in res.stderr
@@ -384,7 +384,7 @@ def main(argv):
         if len(args) % 2 or not set(pairs) <= set(flags):
             spec = None
         else:
-            spec = {"state": "todo", "deps": [], "files": [], "resources": [], "tier": "senior"}
+            spec = {"state": "todo", "deps": [], "files": [], "resources": [], "tier": "intern"}
             for flag, value in pairs.items():
                 key = flags[flag]
                 spec[key] = value if key == "tier" else [x for x in value.split(",") if x]
