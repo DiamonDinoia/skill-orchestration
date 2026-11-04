@@ -65,14 +65,12 @@ the name check. It also runs `skills/parallel/scripts/waves.py --selftest` from 
 test/run.sh   # podman, or: test/run.sh docker
 ```
 
-## Version 2.1.0
+## Version 2.2.0
 
-Install is agent-led: `INSTALL.md` detects the environment, asks one batched question round with
-detected defaults, shows the plan, waits for approval, acts, verifies and reports. Every loop ends
-after one review, one fix round and one re-check of the fixed findings (rules T1-T6 in skill
-`manager`, SKILL.md). Parallel fan-out starts every independent unit at once (P1). Divide and
-conquer splits work into leaves for the cheap tiers (D1). The manager core is short and its
-references load on trigger, so `AGENTS.md` carries only the core. `dag.py` adds `add` and `plan`.
+The manager runs no commands itself; every command routes to a child and waits go to the intern
+tier. Small models serve the junior and intern tiers by default: the intern tier takes the
+cheapest mechanical lane and the junior tier the cheapest code lane, pinned by
+`Qwen/Qwen3.8-27B-FP8` in `flatiron-routing.json`. `dag.py` defaults an untiered node to intern.
 `CHANGELOG.md` lists every change.
 
 ## License

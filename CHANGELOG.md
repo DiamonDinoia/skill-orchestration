@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.0
+- The manager runs no commands; every manager command routes to a child, and waits go to the intern tier.
+- `dag.py` defaults an untiered node to intern and escalates it to junior.
+- `hermes-dispatch-route` defaults `pick` and `lanes` to the intern tier.
+- `flatiron-routing.json`: prefer=cheapest tiers carry their lane model; `Qwen/Qwen3.8-27B-FP8` enters routes.code last, so the junior tier pins the cheapest code lane.
+- Version fields are 2.2.0 in every manifest and skill.
+
 ## 2.1.0
 - Install is agent-led: `INSTALL.md` detects the environment, asks one batched question round with detected defaults, shows the plan, waits for approval, acts, verifies and reports.
 - The install links all six skills into OpenCode and Hermes. OpenCode keeps the link route even though its CLI has a `plugin` subcommand.
