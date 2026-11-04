@@ -16,14 +16,15 @@ The task is whatever the invocation asked for. Absent a task, ask for it.
 
 The role holds for the session and covers every later user message. Only "stop manager" ends it.
 
-The manager keeps plan, decisions and open items in one scratch file. It rewrites that file after every user turn. A resume or a compaction reads the file, so it costs one read.
+The manager keeps plan, decisions and open items in one scratch file. An intern child rewrites that file after every user turn. The child may share the call with `dag.py` bookkeeping. A resume or a compaction reads the file, so it costs one read.
 
 ## Role
 
-- The manager writes specs, briefs and the dispatch graph. It drives the harness and runs read-only state checks.
-- Allowed manager commands are a fixed list. Harness control. `python3 scripts/dag.py`. Graph edits. Read-only state checks, that is `git rev-parse`, `git status --short`, `git cat-file`, `git ls-remote`, and `sha256sum` of a review manifest. Manager-owned background job slots. Every other command goes to a child.
+- The manager decides the spec, the briefs and the graph. A child writes those files. A subagent writes each brief file. The bookkeeping intern child writes the graph. It drives the harness only through dispatch and control.
+- The manager runs no command and edits no file itself, unless the user allows that step. Its only tools are subagent dispatch and control with spawn, steer, stop and list, and the user-question tool.
+- `git`, `ls-remote`, `sha256sum`, `dag.py`, plan-file writes, terminal slots and process waits all go to a child, intern tier by default. The child returns a filtered report, so raw output stays out of the manager context.
 - Every edit and every build, test or long job goes to a child. A subagent does every unit of work, also the simple ones.
-- A long run needs a background slot that outlives a child turn. The child writes the probe and the launch line. The manager fires it on its own slot.
+- A long run, a CI watch, a merge-when-green or a log tail goes to an intern waiter child. The waiter launches the job with `terminal background=true`. It loops `process_manage action=wait` until the job exits. Each wait returns within 180 s. The waiter never hits the 450 s idle or the 1200 s in-tool limits. Those limits live in `Hermes tools/async_delegation.py:86-87`. CI watches use `gh run watch --exit-status` or `gh pr checks --watch` the same way. The waiter returns pass, or the first failing job line.
 - A subagent returns only what the manager needs for its next decision. Work artifacts stay with the child. Only the bounded report crosses.
 - The manager reads bounded verdict and evidence lines itself. Full transcript reading goes to the inspector.
 - The user has final authority on every decision that matters.
@@ -49,7 +50,7 @@ A user-facing defect that only a spec change prevents is its own deliverable. Wh
 
 ## Decisions
 
-Ask the user when the decision is irreversible or outward-facing, a scope change, or a trade-off no experiment settles. Irreversible or outward-facing steps are commit, push, publish, delete and live config change. Otherwise the manager decides alone and says so. It runs decidable candidates in parallel. A trade-off needing exploration runs the `brainstorm` protocol first. Its decision log feeds the spec.
+Ask the user when the decision is irreversible or outward-facing, a scope change, or a trade-off no experiment settles. Irreversible or outward-facing steps are commit, push, publish, delete and live config change. Otherwise the manager decides alone and says so. It dispatches decidable candidates in parallel. A trade-off needing exploration runs the `brainstorm` protocol first. Its decision log feeds the spec.
 
 A user refusal of a question class binds the session. Never ask that class again. A commit chain with a direction-critical design stops after its first commit. The next commit waits for the user.
 
@@ -82,7 +83,7 @@ A screenshot or image verdict goes to the cheapest binding model that reads imag
 | `senior` | Implementation with judgment calls. Code review. |
 | `principal` | Numerics, SIMD, concurrency, performance, unclosed debugging, open-ended design. |
 
-The default starting tier is the cheapest that can do the job, normally `intern` or `junior`. `senior` and above is for review work or after a junior failure. Hard on sight goes to `principal`. Escalate one tier per failed check, crash or stall. A mechanical check or a doc edit that starts at `senior` or `principal` is a dispatch defect. Any tier escalates ambiguity with `[ESCALATE-TO-MANAGER] <problem> <options> <recommendation>`. The child writes that line in its report. The manager answers at the next turn.
+An untiered dispatch defaults to `intern`, the default starting tier. `junior` is for well-specified implementation. `senior` and above is for review work or after a junior failure. Hard on sight goes to `principal`. Escalate one tier per failed check, crash or stall. A mechanical check or a doc edit that starts at `senior` or `principal` is a dispatch defect. Any tier escalates ambiguity with `[ESCALATE-TO-MANAGER] <problem> <options> <recommendation>`. The child writes that line in its report. The manager answers at the next turn.
 
 ## Divide and conquer
 
@@ -94,7 +95,7 @@ Reviews stay one tier above the author. An intern's work takes a `junior` review
 
 If a leaf does not succeed, run `dag.py fail GRAPH ID`, then `dag.py escalate GRAPH ID`. Send the node again at the new tier. Escalate also resets the node's done or failed transitive dependents to todo, the same reset that `retry` does. A `principal` leaf that does not succeed goes to the parent manager.
 
-Write one row for each child outcome to `~/.hermes/cache/dispatch-route/outcomes.jsonl`. Each JSONL row has the fields `ts`, `node`, `kind`, `tier`, `model`, `verdict` and `note`. An `interrupted` or `blocked` verdict is not a `failed` verdict. `HERMES_DISPATCH_LEDGER` overrides the ledger path.
+The bookkeeping intern child writes one row for each child outcome to `~/.hermes/cache/dispatch-route/outcomes.jsonl`. It writes on the manager's order, in the same call as the dag.py state change. Each JSONL row has the fields `ts`, `node`, `kind`, `tier`, `model`, `verdict` and `note`. An `interrupted` or `blocked` verdict is not a `failed` verdict. `HERMES_DISPATCH_LEDGER` overrides the ledger path.
 
 ## Skill preflight
 
@@ -126,9 +127,9 @@ Worktree guards apply to every dispatch. A job whose checks run tests, builds or
 
 Before dispatch, write each deliverable as a node of a graph file in the scratch directory. A node lists `deps`, `files` and `resources`. `deps` are nodes whose output it reads. `files` are paths it writes. `resources` are shared things its checks use, such as containers, images, emulation or CI cell directories and fixed ports. A sibling rebuild in a shared cell directory corrupts the running leg. So shared build and cell dirs are resources even when file lists are disjoint.
 
-Run `python3 scripts/dag.py check GRAPH`, with the path relative to this skill. Exit 1 means an invalid graph. Fix the split, not the check. Exit 2 means a usage or filesystem error. Fix the path, permissions or call and rerun. Tell the user if it persists.
+The bookkeeping child runs `python3 scripts/dag.py check GRAPH`, with the path relative to this skill. Exit 1 means an invalid graph. Fix the split, not the check. Exit 2 means a usage or filesystem error. Fix the path, permissions or call and rerun. Tell the user if it persists.
 
-Each node has an optional `tier` field: `intern`, `junior`, `senior` or `principal`. A node without one is `senior`. `dag.py check` rejects a bad value with `node X: invalid tier Y`.
+Each node has an optional `tier` field: `intern`, `junior`, `senior` or `principal`. A node without one is `intern`. `dag.py check` rejects a bad value with `node X: invalid tier Y`.
 
 Keep the graph as wide as the work allows:
 
@@ -140,6 +141,7 @@ Keep the graph as wide as the work allows:
 
 Scheduler rules:
 
+- One bookkeeping intern child runs every `dag.py` command and returns filtered output.
 - `ready GRAPH --max N` prints at most N runnable ids. N is the free child slots.
 - `dag.py plan GRAPH` is read-only. It prints `L<k>: <ids>` per depth level of open nodes, then `blocked: <ids>` for nodes behind a failed dep, then `width=N critical_path=N`.
 - Grow a live graph with `dag.py add GRAPH ID [--deps a,b] [--files x,y] [--resources r] [--tier T]`. It appends a `todo` node and runs `check`. It refuses a duplicate id or a bad node at exit 1 and writes nothing on refusal. Run `check` before any `start`, same as a fresh graph.
@@ -149,15 +151,15 @@ Scheduler rules:
 - `check` prints `warning: stray top-level key X outside nodes` for a key outside `nodes`. `start` on such a key reports `unknown node X`.
 - Before two nodes share one file through `path#symbol` scopes, prove the splitter's reading on the real file in scratch. What the check treats as disjoint spans decides whether the parallel run is safe. A prose file's sections can fall into one shared span. A symbol that matches nothing passes the check silently.
 - A node that shares files with an earlier node declares it in `deps`. With the dep in place, `check` accepts the overlap. The rule includes done nodes. `check` rejects two unordered writers of one path in any state. So a late fix round depends on every earlier writer of its files, including the finished ones. Shrinking the file list to dodge the overlap hides real edits from the graph.
-- The manager is the only graph writer. Writes hold a lock file next to the graph. State changes go through `dag.py` commands, so no hand edit of the JSON is needed. Read the file even for a planned full overwrite. Read it before the first write of a graph at a reused scratch path.
-- On a child report, run `done GRAPH ID` or `fail GRAPH ID`, then `ready`, then `start`. Dispatch accepted ids at once. Never wait for a full wave.
-- A child stopped without a report holds its files until `fail`. After a stop, death, expired deadline or failed launch, confirm it is not running. Then `fail GRAPH ID`.
+- One bookkeeping child is the only graph writer, one at a time. Writes hold a lock file next to the graph. State changes go through `dag.py` commands, so no hand edit of the JSON is needed. Read the file even for a planned full overwrite. Read it before the first write of a graph at a reused scratch path.
+- On a child report, one bookkeeping child call runs `done GRAPH ID` or `fail GRAPH ID`, then `ready`, then `start`. It returns the accepted ids. Dispatch them at once. Never wait for a full wave.
+- A child stopped without a report holds its files until `fail`. After a stop, death, expired deadline or failed launch, an intern probe child confirms it is not running. Then the bookkeeping child runs `fail GRAPH ID`.
 - Failed nodes do not unblock dependents. A node added after the failure never takes the failed node as a `dep`. `start` refuses it forever. Leave `deps` empty and order the two by hand, or `retry` the failed node first. The failed node still owns its `files`. A renamed successor that writes the same paths trips the overlap guard. On a failed file-owner the route is `retry` in place. A renamed successor only ever takes different files. `retry GRAPH ID` resets a failed or done node and its done or failed transitive dependents to todo. It refuses while the node or a dependent runs.
 - A rejecting review fails the review node. `retry WORK_ID` resets the work node and the review node. The round budget caps the rerun at one fix round and one re-check. The node keeps id and files. Add new files to `files` before retry and pass `check`. The same holds for a scope widening of a running or resumed node. Extend `files` and pass `check` before the steer or resume delta grants the new paths.
-- `retry` on a reviewed-and-failed work node also resets its landed dependents to todo. `git ls-remote` their pushed tips before the redo. Then the child commits a fix on top of the pushed branch instead of rewriting it.
-- `show GRAPH` prints nodes, states and unmet deps. Without the script, keep the same graph and rules by hand.
+- `retry` on a reviewed-and-failed work node also resets its landed dependents to todo. An intern probe child runs `git ls-remote` on their pushed tips before the redo. Then the child commits a fix on top of the pushed branch instead of rewriting it.
+- `show GRAPH` prints nodes, states and unmet deps. Without the script, keep the same graph and rules through a bookkeeping child.
 
-Gate an irreversible final step in the brief, never in a later steer. Irreversible final steps are push, delete and publish. A steer arrives only at the child's next tool result, and a child already inside the step acts first. When a later go or no-go is even possible, the child pushes a staging branch. The manager lands by fast-forward after the gates. Before steering against a side effect, `git ls-remote` the tip first. A child that no longer lists as running may already have pushed.
+Gate an irreversible final step in the brief, never in a later steer. Irreversible final steps are push, delete and publish. A steer arrives only at the child's next tool result, and a child already inside the step acts first. When a later go or no-go is even possible, the child pushes a staging branch. An intern child lands by fast-forward after the gates. Before steering against a side effect, an intern probe child runs `git ls-remote` on the tip first. A child that no longer lists as running may already have pushed.
 
 ## Inspection
 
