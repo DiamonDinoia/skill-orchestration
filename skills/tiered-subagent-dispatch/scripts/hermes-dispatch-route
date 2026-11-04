@@ -252,7 +252,26 @@ def _pick_setup(kind, tier, needs):
     return cfg, tiers[tier], needs
 
 
-_EFFORT_SCALE = ("none", "low", "medium", "high", "xhigh", "max")   # the flatiron reasoning scale
+# mirrors Hermes VALID_REASONING_EFFORTS in Hermes ladder order, with "none" kept at the bottom
+_EFFORT_SCALE = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+
+
+_WARNED_EFFORTS = set()
+
+
+def _known_effort(name, then="using medium"):
+    """True when the scale holds name; else False and one stderr warning per name."""
+    if name in _EFFORT_SCALE:
+        return True
+    if name not in _WARNED_EFFORTS:
+        _WARNED_EFFORTS.add(name)
+        print(f"warning: unknown reasoning effort {name!r}; valid: {', '.join(_EFFORT_SCALE)}; {then}", file=sys.stderr)
+    return False
+
+
+def _tier_effort(name):
+    """The tier's effort, or medium (the Hermes core default) when the name is unknown."""
+    return name if _known_effort(name) else "medium"
 
 
 def _effort(m, effort, cfg):
@@ -260,7 +279,8 @@ def _effort(m, effort, cfg):
     its source is the provider's own error text. No entry or an accepted value: the tier value
     stays. A rejected value becomes the highest accepted value at or below it; when nothing is
     at or below, the lowest accepted value and a warning (the only case that may exceed)."""
-    acc = (cfg.get("efforts") or {}).get(m)
+    effort = _tier_effort(effort)
+    acc = [e for e in (cfg.get("efforts") or {}).get(m) or () if _known_effort(e, "ignoring it")]  # none left: no entry
     if not acc or effort in acc:
         return effort
     below = [e for e in _EFFORT_SCALE[:_EFFORT_SCALE.index(effort) + 1] if e in acc]
@@ -1003,7 +1023,7 @@ def sync(refresh):
     hermes = str(Path.home() / ".local" / "bin" / "hermes")
     # Tier table for delegating parents: same strategy words as ROUTING_FILE, ids resolved live.
     tiers_cfg = routing().get("tiers") or DEFAULT_ROUTING["tiers"]
-    tiers_yaml = {t: {"reasoning_effort": c["reasoning_effort"], "skills": list(c.get("skills", [])),
+    tiers_yaml = {t: {"reasoning_effort": _tier_effort(c["reasoning_effort"]), "skills": list(c.get("skills", [])),
                       "fallback": [{"provider": CLAUDE, "model": claude_id(latest, f)} for f in c["fallback"]]}
                   for t, c in tiers_cfg.items()}
     # prefer=cheapest tiers carry their own model: intern serves mechanical, junior serves code

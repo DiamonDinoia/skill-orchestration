@@ -122,6 +122,32 @@ def check_effort_round_down():
     assert "m/Xhigh" in buf.getvalue() and "xhigh" in buf.getvalue(), buf.getvalue()
 
 
+def check_effort_unknown_names():
+    """An effort name outside the scale warns with the valid list and never raises. The scale
+    holds every Hermes name, and every value of the shipped efforts map."""
+    r = load("hermes-dispatch-route")
+
+    def run(m, effort, accepted):
+        r._WARNED_EFFORTS.clear()                                                # each case sees its own warning
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            got = r._effort(m, effort, {"efforts": {m: accepted}})
+        return got, buf.getvalue()
+    valid = "valid: " + ", ".join(r._EFFORT_SCALE)
+    assert run("m/A", "ultra", ["xhigh", "medium", "low"]) == ("xhigh", "")     # a Hermes name rounds down
+    got, err = run("m/B", "bogus", ["xhigh", "medium", "low"])
+    assert got == "medium" and err == f"warning: unknown reasoning effort 'bogus'; {valid}; using medium\n", (got, err)
+    got, err = run("m/C", "high", ["bogus", "low"])
+    assert got == "low" and err.count("'bogus'") == 1 and valid in err, (got, err)
+    got, err = run("m/D", "high", ["bogus"])
+    assert got == "high" and err.count("'bogus'") == 1 and valid in err, (got, err)
+    jpath = STAGE / "flatiron-routing.json"                                      # staged runs judge the staged json
+    cfg = json.loads((jpath if jpath.is_file() else r.ROUTING_FILE).read_text())
+    for m, acc in (cfg.get("efforts") or {}).items():
+        if m != "_doc":
+            assert set(acc) <= set(r._EFFORT_SCALE), (m, acc)
+
+
 def check_lanes():
     r = load("hermes-dispatch-route")
     r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9", "haiku": "claude-haiku-9", "sol": "x"}
@@ -1573,7 +1599,7 @@ def check_failed_comma_list():
 
 
 if __name__ == "__main__":
-    check_route(); check_tiers(); check_effort_clamp(); check_effort_round_down(); check_lanes(); check_needs(); check_default_features()
+    check_route(); check_tiers(); check_effort_clamp(); check_effort_round_down(); check_effort_unknown_names(); check_lanes(); check_needs(); check_default_features()
     check_probe_fallback()
     check_sync_features(); check_sync_rank(); check_sync_rank_gates()
     check_sync_rank_gate_crash(); check_sync_rank_budget(); check_sync_config_fail()
