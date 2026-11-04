@@ -8,7 +8,7 @@
   "mistralai/Mistral-Medium-3.5-128B": 1
  },
  "routes": {
-  "code": ["XiaomiMiMo/MiMo-V2.6-Pro-MOPD", "moonshotai/Kimi-K3", "zai-org/GLM-5.3"],
+  "code": ["XiaomiMiMo/MiMo-V2.6-Pro-MOPD", "moonshotai/Kimi-K3", "zai-org/GLM-5.3", "Qwen/Qwen3.8-27B-FP8"],
   "debug": ["XiaomiMiMo/MiMo-V2.6-Pro-MOPD", "moonshotai/Kimi-K3", "zai-org/GLM-5.3"],
   "frontend": ["XiaomiMiMo/MiMo-V2.6-Pro-MOPD", "zai-org/GLM-5.3", "moonshotai/Kimi-K3", "Qwen/Qwen3.8-27B-FP8"],
   "research": ["XiaomiMiMo/MiMo-V2.6-Pro-MOPD", "moonshotai/Kimi-K3", "zai-org/GLM-5.3"],
