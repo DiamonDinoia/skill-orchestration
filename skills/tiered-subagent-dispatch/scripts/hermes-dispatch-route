@@ -460,6 +460,48 @@ def by_rank(models, rank):
     return sorted(models, key=lambda m: -rank.get(m, 0))
 
 
+def _pool_after(anchor, healthy):
+    """Quota-free pool only: the healthy flatiron lanes by rank after anchor. No paid id may enter."""
+    return [{"provider": "flatiron", "model": m}
+            for m in (healthy[healthy.index(anchor) + 1:] if anchor in healthy else ())
+            if not re.search(r"claude|haiku|sonnet|opus|gpt|codex", m, re.I)]
+
+
+def _keep_user(own, live, written):
+    """The sync chain plus the live entries the stamp `written` shows sync never wrote. A hand-edited
+    entry (paid included) is kept as it stands: never moved into the chain, never dropped by it."""
+    ours = {e.get("model") for e in own} | set(written or [])
+    return list(own) + [e for e in live if isinstance(e, dict) and e.get("model") and e["model"] not in ours]
+
+
+def _live_entries(text, key=None):
+    """The fallback entries in a live `hermes config get` value (its yaml); key selects one tier's list.
+    An unset or foreign value parses as no entries: it holds nothing to keep."""
+    try:
+        data = __import__("yaml").safe_load(text)
+    except Exception:
+        data = None
+    if key is not None:
+        return ((data.get(key) or {}).get("fallback") or []) if isinstance(data, dict) else []
+    return data if isinstance(data, list) else []
+
+
+def _stamp_read():
+    """The chains sync wrote last round (model ids), or {} when no stamp exists yet."""
+    try:
+        data = json.loads((SIDECAR_DIR / "fallback-stamp.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _stamp_write(own):
+    try:
+        (SIDECAR_DIR / "fallback-stamp.json").write_text(json.dumps(own))
+    except OSError as e:
+        print(f"config: fallback stamp not written: {_san(e)}; the next sync keeps every live entry")
+
+
 def _job_model(argv):
     """The flatiron model of one `hermes chat` argv, or None. One job counts once, on the hermes
     process itself: argv[0] basename hermes, or python running the hermes entry point (a script
@@ -1008,7 +1050,10 @@ def sync_rank(latest, health, listed):
 def sync(refresh):
     """Point Hermes config at discovered models; writes only on change, only delegation.* keys.
     delegate_task = best healthy flatiron model (stays flatiron/Kimi-K3 if all are down); fallback =
-    latest Haiku, latest Sonnet, latest Opus; delegation.tiers = the ROUTING_FILE tier table with live ids.
+    the healthy flatiron lanes by rank after that pick, quota-free pool only; delegation.tiers = the
+    ROUTING_FILE tier table with live ids, each tier falling back down its own cheaper-or-equal lanes.
+    A hand-edited fallback list keeps the entries sync did not write: fallback-stamp.json records the
+    chains sync wrote, and those alone are replaced or cleared.
     Also probes new models' features (D3) and ranks unranked listed models (D4) before the config write."""
     latest = resolve_latest(refresh)
     health = flatiron_status(True)  # always re-probe: gateway models come and go
@@ -1019,12 +1064,13 @@ def sync(refresh):
     # Flatiron first; when every flatiron model is down, config keeps flatiron/Kimi-K3 and the
     # children fail over through fallback_providers. The next healthy sync restores real routing.
     prov, model = ("flatiron", healthy[0]) if healthy else ("flatiron", "moonshotai/Kimi-K3")
-    chain = [{"provider": CLAUDE, "model": m} for m in (latest["haiku"], latest["sonnet"], latest["opus"]) if m != model]
+    # quota-free pool only: fallbacks take the healthy flatiron lanes after the pick, never paid
+    chain = _pool_after(model, healthy)
     hermes = str(Path.home() / ".local" / "bin" / "hermes")
     # Tier table for delegating parents: same strategy words as ROUTING_FILE, ids resolved live.
     tiers_cfg = routing().get("tiers") or DEFAULT_ROUTING["tiers"]
     tiers_yaml = {t: {"reasoning_effort": _tier_effort(c["reasoning_effort"]), "skills": list(c.get("skills", [])),
-                      "fallback": [{"provider": CLAUDE, "model": claude_id(latest, f)} for f in c["fallback"]]}
+                      "fallback": []}
                   for t, c in tiers_cfg.items()}
     # prefer=cheapest tiers carry their own model: intern serves mechanical, junior serves code
     cfg_now = routing()
@@ -1034,6 +1080,10 @@ def sync(refresh):
             if m:
                 tiers_yaml[t] = {"reasoning_effort": _effort(m, tiers_yaml[t]["reasoning_effort"], cfg_now), "model": m, "provider": "flatiron",
                                  "skills": tiers_yaml[t]["skills"], "fallback": tiers_yaml[t]["fallback"]}
+    for t in tiers_yaml:   # each tier falls back down its own cheaper-or-equal lanes
+        tiers_yaml[t]["fallback"] = _pool_after(tiers_yaml[t].get("model", model), healthy)
+    own = {"fallback_providers": [c["model"] for c in chain],    # the stamp: sync's chains, ids only
+           "tiers": {t: [f["model"] for f in tc["fallback"]] for t, tc in tiers_yaml.items()}}
     want = {"delegation.fallback_providers": json.dumps(chain), "delegation.tiers": json.dumps(tiers_yaml),
             "delegation.provider": prov, "delegation.model": model}  # provider+model: written last
     changed, applied, cur = [], [], {}
@@ -1049,9 +1099,22 @@ def sync(refresh):
                 print(f"config: hermes config get {k} exited {p.returncode}: {_san(p.stderr)}; sync failed, config unchanged")
                 return 1
             cur[k] = p.stdout.strip()  # an unset key reads as empty; the write below defines it
+        # user carve-out: keep the live entries the stamp shows sync did not write (user-named,
+        # paid included); the stamp's chains are sync's and get replaced by the new ones
+        stamp = _stamp_read()
+        chain = _keep_user(chain, _live_entries(cur["delegation.fallback_providers"]),
+                           stamp.get("fallback_providers"))
+        want["delegation.fallback_providers"] = json.dumps(chain)
+        for t in tiers_yaml:
+            tiers_yaml[t]["fallback"] = _keep_user(tiers_yaml[t]["fallback"],
+                                                   _live_entries(cur["delegation.tiers"], t),
+                                                   (stamp.get("tiers") or {}).get(t))
+        want["delegation.tiers"] = json.dumps(tiers_yaml)
         for key, val in want.items():
             if key == "delegation.fallback_providers":
-                if re.findall(r"model:\s*(\S+)", cur[key]) == [c["model"] for c in chain]:
+                # an empty chain still writes [] so an unset or stale value clears
+                if (re.findall(r"model:\s*(\S+)", cur[key]) == [c["model"] for c in chain]
+                        and (chain or cur[key].strip() in ("[]",))):
                     continue
             elif key == "delegation.tiers":
                 cur_models = re.findall(r"model:\s*(\S+)", cur[key])
@@ -1085,6 +1148,7 @@ def sync(refresh):
                 print(f"config: hermes config set {key} {what} after {len(applied)} attempt(s); sync failed")
                 return 1
             changed.append(f"{key}={val}")
+        _stamp_write(own)   # after the writes: a rolled-back transaction keeps the old stamp
         print("config updated: " + "; ".join(changed) if changed else "config already current")
         return 0
 

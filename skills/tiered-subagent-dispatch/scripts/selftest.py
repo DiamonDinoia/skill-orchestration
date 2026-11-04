@@ -1200,6 +1200,110 @@ def check_sync_tier_models():
         assert "delegation.tiers=" in buf.getvalue(), buf.getvalue()
 
 
+def _sync_fake_config(r, cfg, health, listed):
+    """Shared sync harness: stub the routing inputs and record every hermes config write in store."""
+    r.SIDECAR_DIR = Path(tempfile.mkdtemp()) / "cache" / "dispatch-route"
+    r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9",
+                                   "haiku": "claude-haiku-9", "sol": "gpt-5.2-sol"}
+    r.routing = lambda: cfg
+    r.flatiron_status = lambda *a: health
+    r.load_cache = lambda: {"flatiron": {"listed": listed}}
+    r.sync_features = lambda *a: None
+    r.sync_rank = lambda *a: None
+    store = {}                                          # fake hermes config: values stored as the yaml `get` prints
+    def run(cmd, **kw):
+        if cmd[2] == "get":
+            if cmd[3] not in store:
+                return types.SimpleNamespace(stdout="", stderr="Config key not set", returncode=1)
+            v = store[cmd[3]]
+            out = v if isinstance(v, str) else __import__("yaml").safe_dump(v, sort_keys=False)
+            return types.SimpleNamespace(stdout=out, stderr="", returncode=0)
+        store[cmd[3]] = json.loads(cmd[4]) if cmd[3] not in ("delegation.provider", "delegation.model") else cmd[4]
+        return types.SimpleNamespace(stdout="ok", stderr="", returncode=0)
+    r.subprocess = types.SimpleNamespace(run=run, TimeoutExpired=subprocess.TimeoutExpired,
+                                         CalledProcessError=subprocess.CalledProcessError)
+    return store
+
+
+def check_sync_fallback_quota_free():
+    """The written fallback lists hold only quota-free flatiron lanes. The lanes after the pick are
+    one unhealthy flatiron lane and the paid rungs: neither enters delegation.fallback_providers or
+    a tier fallback list, and every entry stays on flatiron."""
+    r = load("hermes-dispatch-route")
+    tiers = json.loads(r.ROUTING_FILE.read_text())["tiers"]               # the real tier table: prefer on intern and junior
+    cfg = {"rank": {"s/Strong": 5, "m/Mid": 4, "c/Cheap": 2}, "tiers": tiers,
+           "routes": {"code": ["s/Strong", "m/Mid", "c/Cheap"], "mechanical": ["m/Mid", "s/Strong", "c/Cheap"]},
+           "features": {}}
+    # unhealthy-then-paid: after the pick sit one dead flatiron lane, then the paid candidates
+    health = {"s/Strong": {"ok": True}, "m/Mid": {"ok": False}, "c/Cheap": {"ok": True},
+              "claude-haiku-9": {"ok": True}, "claude-sonnet-9": {"ok": True},
+              "claude-opus-9": {"ok": True}, "gpt-5.2-sol": {"ok": True}}
+    store = _sync_fake_config(r, cfg, health, list(cfg["rank"]))
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert r.sync(False) == 0
+    chain = store["delegation.fallback_providers"]
+    fb = {t: v["fallback"] for t, v in store["delegation.tiers"].items()}
+    one = [{"provider": "flatiron", "model": "c/Cheap"}]
+    assert chain == one, chain                                            # the dead lane and the paid rungs drop
+    assert fb == {"intern": [], "junior": [], "senior": one, "principal": one}, fb   # a pinned tier anchors its own chain
+    blob = json.dumps([chain] + list(fb.values())).lower()
+    assert not any(w in blob for w in ("claude", "haiku", "sonnet", "opus", "gpt", "codex")), blob
+    assert all(e["provider"] == "flatiron" for v in [chain] + list(fb.values()) for e in v), (chain, fb)
+
+
+def check_sync_fallback_single_model():
+    """One healthy flatiron model: delegation.fallback_providers and every tier fallback list write
+    an empty list, and a second sync rewrites nothing."""
+    r = load("hermes-dispatch-route")
+    tiers = json.loads(r.ROUTING_FILE.read_text())["tiers"]
+    cfg = {"rank": {"a/Only": 1}, "tiers": tiers,
+           "routes": {"code": ["a/Only"], "mechanical": ["a/Only"]}, "features": {}}
+    store = _sync_fake_config(r, cfg, {"a/Only": {"ok": True}}, ["a/Only"])
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert r.sync(False) == 0
+    assert store["delegation.fallback_providers"] == [], store["delegation.fallback_providers"]
+    assert {t: v["fallback"] for t, v in store["delegation.tiers"].items()} == \
+           {"intern": [], "junior": [], "senior": [], "principal": []}, store["delegation.tiers"]
+    with contextlib.redirect_stdout(buf := io.StringIO()):
+        assert r.sync(False) == 0
+    assert "config already current" in buf.getvalue(), buf.getvalue()
+
+
+def check_sync_fallback_user_kept():
+    """A hand-edited fallback list keeps its user-named paid entries. The stamp holds the chain sync
+    wrote last round: the new quota-free chain replaces that chain in delegation.fallback_providers
+    and in every tier fallback list, while the user-named paid entries stay where the user put them."""
+    r = load("hermes-dispatch-route")
+    tiers = json.loads(r.ROUTING_FILE.read_text())["tiers"]
+    cfg = {"rank": {"s/Strong": 5, "m/Mid": 4, "c/Cheap": 2}, "tiers": tiers,
+           "routes": {"code": ["s/Strong", "m/Mid", "c/Cheap"], "mechanical": ["m/Mid", "s/Strong", "c/Cheap"]},
+           "features": {}}
+    health = {"s/Strong": {"ok": True}, "m/Mid": {"ok": True}, "c/Cheap": {"ok": True}}
+    store = _sync_fake_config(r, cfg, health, list(cfg["rank"]))
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert r.sync(False) == 0                                   # round one writes and stamps the chains
+    assert [e["model"] for e in store["delegation.fallback_providers"]] == ["m/Mid", "c/Cheap"], store
+    # the hand edit: user-named paid entries replace the sync-written lists
+    store["delegation.fallback_providers"] = [{"provider": "anthropic", "model": "claude-haiku-5-5"}]
+    store["delegation.tiers"]["senior"]["fallback"] = [{"provider": "openai", "model": "gpt-5.4"}]
+    health["m/Mid"]["ok"] = False                                   # the new quota-free chain drops m/Mid
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert r.sync(False) == 0
+    one = [{"provider": "flatiron", "model": "c/Cheap"}]
+    out = store["delegation.fallback_providers"]
+    assert out == one + [{"provider": "anthropic", "model": "claude-haiku-5-5"}], out   # paid kept
+    fb = {t: v["fallback"] for t, v in store["delegation.tiers"].items()}
+    assert fb["senior"] == one + [{"provider": "openai", "model": "gpt-5.4"}], fb       # paid kept
+    assert fb["principal"] == one, fb                                # the stamped chain is replaced
+    assert "m/Mid" not in json.dumps(fb), fb                         # round one's chains are gone
+    stamp = json.loads((r.SIDECAR_DIR / "fallback-stamp.json").read_text())
+    assert stamp["fallback_providers"] == ["c/Cheap"], stamp          # the stamp holds the new chain
+    assert stamp["tiers"]["senior"] == ["c/Cheap"], stamp
+    with contextlib.redirect_stdout(buf := io.StringIO()):
+        assert r.sync(False) == 0
+    assert "config already current" in buf.getvalue(), buf.getvalue()  # a kept list is stable
+
+
 def check_inflight_scan():
     r = load("hermes-dispatch-route")
     hermes = ["python3", "/tmp/probe/hermes", "chat", "--provider", "flatiron", "-m", "moonshotai/Kimi-K3", "-q", "x"]
@@ -1605,7 +1709,8 @@ if __name__ == "__main__":
     check_sync_rank_gate_crash(); check_sync_rank_budget(); check_sync_config_fail()
     check_principal_floor(); check_principal_anchor(); check_sync_rank_reasons(); check_sync_rank_routes(); check_vision_probe()
     check_assign(); check_assign_capacity(); check_assign_capacity_inflight()
-    check_prefer_cheapest(); check_sync_tier_models(); check_inflight_scan(); check_review()
+    check_prefer_cheapest(); check_sync_tier_models(); check_sync_fallback_quota_free()
+    check_sync_fallback_single_model(); check_sync_fallback_user_kept(); check_inflight_scan(); check_review()
     check_ledger_qwen_first(); check_ledger_demotes(); check_ledger_mixed_verdicts()
     check_ledger_bad_lines(); check_ledger_all_skipped()
     check_qwen_first_not_principal(); check_effort_at_most_high(); check_ledger_fallback_note_lanes_assign()
