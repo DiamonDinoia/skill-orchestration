@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.2.1
+- Routing: reasoning effort rounds down to the highest accepted level at or below the request; it never rises above it.
+
 ## 2.2.0
 - The manager runs no commands; every manager command routes to a child, and waits go to the intern tier.
 - `dag.py` defaults an untiered node to intern and escalates it to junior.

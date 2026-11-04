@@ -1,6 +1,6 @@
 {
   "name": "orchestration",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Persistent manager role with tiered dispatch (intern/junior/senior/principal) and a hard context budget.",
   "author": {
     "name": "Marco Barbone",
