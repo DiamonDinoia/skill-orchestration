@@ -31,7 +31,7 @@
   "Qwen/Qwen3.8-27B-FP8": {"vision": true, "web": false, "probed": "2026-10-25"}
  },
  "efforts": {
-  "_doc": "the reasoning efforts each flatiron model accepts; source: the provider's own error text. A model with no entry takes the tier value unchanged; a rejected value becomes the nearest accepted value at or above it, else the highest accepted",
+  "_doc": "the reasoning efforts each flatiron model accepts; source: the provider's own error text. A model with no entry takes the tier value unchanged; a rejected value becomes the highest accepted value at or below it; when none is at or below, the lowest accepted value and a warning",
   "Qwen/Qwen3.8-27B-FP8": ["xhigh", "medium", "low"],
   "mistralai/Mistral-Medium-3.5-128B": ["none", "high"],
   "moonshotai/Kimi-K3": ["low", "high", "max"]

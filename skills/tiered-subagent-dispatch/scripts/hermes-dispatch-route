@@ -258,12 +258,17 @@ _EFFORT_SCALE = ("none", "low", "medium", "high", "xhigh", "max")   # the flatir
 def _effort(m, effort, cfg):
     """The --reasoning value for flatiron model m. The efforts map lists what each model accepts;
     its source is the provider's own error text. No entry or an accepted value: the tier value
-    stays. A rejected value becomes the nearest accepted value at or above it, else the highest."""
+    stays. A rejected value becomes the highest accepted value at or below it; when nothing is
+    at or below, the lowest accepted value and a warning (the only case that may exceed)."""
     acc = (cfg.get("efforts") or {}).get(m)
     if not acc or effort in acc:
         return effort
-    above = [e for e in _EFFORT_SCALE[_EFFORT_SCALE.index(effort):] if e in acc]
-    return above[0] if above else max(acc, key=_EFFORT_SCALE.index)
+    below = [e for e in _EFFORT_SCALE[:_EFFORT_SCALE.index(effort) + 1] if e in acc]
+    if below:
+        return below[-1]
+    lowest = min(acc, key=_EFFORT_SCALE.index)
+    print(f"warning: effort {effort} exceeds every level {m} accepts; using {lowest}", file=sys.stderr)
+    return lowest
 
 
 def _flatiron_flags(m, tcfg, cfg):

@@ -80,8 +80,8 @@ def check_tiers():
 
 
 def check_effort_clamp():
-    """The efforts map clamps --reasoning to what each flatiron model accepts: the nearest
-    accepted value at or above the tier effort. pick, lanes and assign agree on the value."""
+    """The efforts map clamps --reasoning to what each flatiron model accepts: the highest
+    accepted value at or below the tier effort. pick, lanes and assign agree on the value."""
     r = load("hermes-dispatch-route")
     r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9", "haiku": "claude-haiku-9", "sol": "x"}
     jpath = STAGE / "flatiron-routing.json"                       # staged runs judge the staged json
@@ -98,12 +98,28 @@ def check_effort_clamp():
                 r.assign([("n1", "code", tier, [])])[0]]
         return [o["flags"].split("--reasoning ", 1)[1].split()[0] for o in outs]
 
-    assert efforts_of(QWEN, "senior") == ["xhigh"] * 3                # high -> xhigh
-    assert efforts_of(QWEN, "principal") == ["xhigh"] * 3             # principal high -> xhigh
-    assert efforts_of(MIST, "intern") == ["high"] * 3                 # low -> high
+    assert efforts_of(QWEN, "senior") == ["medium"] * 3               # high -> medium
+    assert efforts_of(QWEN, "principal") == ["medium"] * 3            # principal high -> medium
+    assert efforts_of(MIST, "intern") == ["none"] * 3                 # low -> none
     assert efforts_of(MIST, "principal") == ["high"] * 3              # principal high -> high
     jv = cfg["tiers"]["junior"]["reasoning_effort"]                    # the json value, not a live pin
     assert efforts_of("n/Unlisted", "junior") == [jv] * 3              # no entry: the tier value stays
+
+
+def check_effort_round_down():
+    """Round down: a rejected effort takes the highest accepted level at or below the request;
+    only an all-above accepted set falls to the lowest, with a warning naming model and level."""
+    r = load("hermes-dispatch-route")
+    cfg = {"efforts": {"m/Down": ["xhigh", "medium", "low"], "m/Xhigh": ["xhigh"]}}
+    assert r._effort("m/Down", "high", cfg) == "medium"
+    assert r._effort("m/Down", "low", cfg) == "low"
+    assert r._effort("m/Down", "medium", cfg) == "medium"
+    assert r._effort("m/None", "high", cfg) == "high"
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        got = r._effort("m/Xhigh", "high", cfg)
+    assert got == "xhigh", got
+    assert "m/Xhigh" in buf.getvalue() and "xhigh" in buf.getvalue(), buf.getvalue()
 
 
 def check_lanes():
@@ -1377,7 +1393,7 @@ def check_norm_model_size_suffix():
 
 def check_sync_pin_effort_clamp():
     """D8: sync never writes a reasoning_effort the pinned model refuses. The fixture pins Mistral
-    (accepts none, high) for intern at tier effort low: the written tier must say high."""
+    (accepts none, high) for intern at tier effort low: the written tier must say none."""
     r = load("hermes-dispatch-route")
     with tempfile.TemporaryDirectory() as d:
         r.SIDECAR_DIR = Path(d, "cache", "dispatch-route")
@@ -1410,7 +1426,7 @@ def check_sync_pin_effort_clamp():
         with contextlib.redirect_stdout(io.StringIO()):
             assert r.sync(False) == 0
         t = store["delegation.tiers"]
-        assert (t["intern"]["model"], t["intern"]["reasoning_effort"]) == (mist, "high"), t["intern"]
+        assert (t["intern"]["model"], t["intern"]["reasoning_effort"]) == (mist, "none"), t["intern"]
 
 
 QWEN, MIST, KIMI = "Qwen/Qwen3.8-27B-FP8", "mistralai/Mistral-Medium-3.5-128B", "moonshotai/Kimi-K3"
@@ -1557,7 +1573,7 @@ def check_failed_comma_list():
 
 
 if __name__ == "__main__":
-    check_route(); check_tiers(); check_effort_clamp(); check_lanes(); check_needs(); check_default_features()
+    check_route(); check_tiers(); check_effort_clamp(); check_effort_round_down(); check_lanes(); check_needs(); check_default_features()
     check_probe_fallback()
     check_sync_features(); check_sync_rank(); check_sync_rank_gates()
     check_sync_rank_gate_crash(); check_sync_rank_budget(); check_sync_config_fail()
