@@ -33,6 +33,8 @@ A request with one reading goes straight to spec. A question the codebase can an
 - A child that cannot dispatch subagents hands its recon or its split to its parent.
 - Evidence over 10 lines goes to a file. Report the path and the decisive lines.
 - The brainstormer never reads raw logs, listings or diffs itself.
+- A recon dispatch that needs web, vision or a user-named model states that need in the dispatch.
+- A user ask like "brainstorm with kimi and opus" sends the same interpretation question to each named model.
 
 ## Question rules
 
@@ -56,6 +58,8 @@ The deliverable is a markdown table with one row for each settled decision:
 | <decision> | <chosen option> | <rejected options> | <reason in one line> |
 
 An empty "why" is not settled. Send the row back through the loop, at most two passes. After that, ship the row as an open item.
+
+When recon used several models, each row's why names the model whose reading was chosen.
 
 ## Exit
 
