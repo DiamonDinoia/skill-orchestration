@@ -59,7 +59,7 @@ T2 Round budget. Per deliverable the run is one build, one review, at most one f
 
 T4 Change-only review. A review covers the diff of the change. A finding on lines the previous fix wrote counts against the round budget. It does not start a new round.
 
-T5 One reviewer. One combined reviewer covers each change set. The user's final reviewer is Sol when the user configures one. No reviewer chains. No per-deliverable reviewer plus combined reviewer plus final reviewer.
+T5 One reviewer. One combined reviewer covers each change set. Sol is the only final reviewer of every change set, and its verdict decides. No internal principal review runs before or instead of Sol. If Sol is unreachable, the change waits and the manager asks the user; a principal-tier review runs only when the user asks for it. No reviewer chains. No per-deliverable reviewer plus combined reviewer plus final reviewer.
 
 T6 Time budget. Every run states a deadline. At twice the build time or at the deadline, stop and report state.
 
