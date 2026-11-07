@@ -14,7 +14,7 @@ The routing and config rules below are Hermes only. For children that run in ano
 
 ## Quota and provider rules
 
-- Quota rule. A tier's fallback never lands on a paid Claude or OpenAI model unless the user named it. A paid model is a named escalation with the user's approval. Fallback rungs move only inside the quota-free pool.
+- Quota rule. A paid model (Claude, OpenAI) runs when the user names the model for the task. It also runs as the last resort after every eligible free flatiron model failed or none is healthy. Every last-resort paid landing is flagged in the report. A named model reaches a task through `pin_model`. A `pin_provider` that names a paid provider without `pin_model` is refused. Paid fallback rungs always come after every flatiron rung.
 - Provider fence. Every brief names its provider fence, for example "flatiron only; on any other provider stop and report". The first report line must satisfy the fence before work counts. See the report first line rule.
 
 ## Harness notes
@@ -39,7 +39,7 @@ Rules that hold:
 - An untiered task routes to intern. The delegation-tiers plugin sets this default.
 - Reasoning effort tops out at high. Max runs only when the user asks for it.
 - A per-model effort override lives in the top-level `efforts` map of `references/flatiron-routing.json`, keyed by model. `sync` writes it from the rejection text. `pick` and `assign` clamp to it. A child that gets a refusal line reports the line and the effort it sent, and the manager reroutes the deliverable.
-- Flatiron first. Every subagent goes to a flatiron model if any healthy one fits. A tier's fallback rung stays in the quota-free pool. Fable is excluded unless the user allows it for one named deliverable.
+- Flatiron first. Every subagent goes to a flatiron model if any healthy one fits. The paid fallback rungs come after every flatiron rung. Fable is excluded unless the user allows it for one named deliverable.
 - Eligibility is a hard filter. A flatiron model serves a kind only when `references/flatiron-routing.json` names it in that kind's `routes` list, it is healthy and it passes `--needs`. The `floors` key is the capability cut line. A missing anchor entry fails closed. Mechanics: `references/routing-mechanics.md`.
 - Spread parallel work over the whole eligible set. `assign` places each node on the eligible model with the fewest in-flight jobs. No model has a job cap. Never split one node for show.
 - The model set comes from the gateway. A routing child runs `hermes-dispatch-route models` and `sync`. See `references/routing-mechanics.md`. Never hand-set a literal model id.
@@ -53,7 +53,7 @@ A `delegate_task` task takes three optional fields. The tier still sets the reas
 - `pin_provider`. The provider for the task.
 - `needs`. A list of `vision` and `web`.
 - An unknown or ambiguous `pin_model` refuses the task and lists the candidates. The whole call fails only when no task can run.
-- A paid model runs only through `pin_model`, and only when the user named that model. `needs` and the fallback stay on flatiron.
+- A paid model runs only through `pin_model`. The user names that model for the task. Else it is the last resort after every eligible free flatiron model failed or none is healthy. A `pin_provider` that names a paid provider without `pin_model` is refused. The paid fallback rungs come after every flatiron rung.
 - `needs vision` keeps the tier model when its features say vision. Else it picks the best healthy flatiron model with vision. Else the task returns `blocked`.
 - `needs web` never moves a task to a paid model. Every child has `web_search` and `web_extract`. The keyless backend exa serves both once `config.yaml` sets `web.search_backend` and `web.extract_backend` to exa.
 - Brainstorm multi-model recon: one task per user-named model, each with `pin_model`, all with the same question.
@@ -63,7 +63,7 @@ A `delegate_task` task takes three optional fields. The tier still sets the reas
 
 1. Best eligible flatiron model for the task kind. A routing child runs `hermes-dispatch-route pick <kind> [--tier <tier>]`. The kinds are code, debug, frontend, research, prose, mechanical and vision. It returns `{provider, model, flags, reason, skipped}`. A `principal` pick is anchor-first from the kind's `floors`.
 2. It fails (bad result after one corrective follow-up, crash, no progress). A routing child reruns `pick` with `--failed <every model that failed so far>`. It returns a flatiron model strictly stronger than every failed one.
-3. No stronger flatiron model is healthy. The deliverable stops and reports `blocked`. The manager takes it to the user. A fallback to a paid model runs only when the user named that model.
+3. No stronger flatiron model is healthy. The deliverable stops and reports `blocked`. The manager takes it to the user. A paid model runs as the last resort after every eligible free flatiron model failed or none is healthy.
 
 Escalate only the failing deliverables. A routing child resolves "latest" ids live with `hermes-dispatch-route latest`, only for a model the user named. A `vision` pick keeps only models with `features` vision true. In-process `delegate_task` children use `pin_model`, or the tier model pin, or `delegation.provider/model`. `sync` sets it to the highest-ranked healthy flatiron model. When none is healthy, `sync` keeps the pinned flatiron default and the report flags it. A mid-session model request of the user changes only new dispatches.
 
@@ -115,7 +115,7 @@ Escalate only the failing deliverables. A routing child resolves "latest" ids li
 - **Removing a tool: official path first.** A read-only child writes the documented uninstall sequence with what each step leaves behind. The purge job runs those commands, then the installer's own uninstall, then edits by hand only the leftovers. A tool that serves the subagents' own route is removed last. Detail: `references/dispatch-ops-pitfalls.md`.
 - **Mid-task model exclusion.** An exclusion covers every route to the model: `delegation.model`, the tier pins and the fallback lists. Re-route this task's deliveries to the next eligible model and state the re-route. Check each completion header's Model line once per batch. Flag a result that landed on an excluded model instead of rerunning it.
 - **Web research split.** Web search and fetch run on a flatiron child with `web_search` and `web_extract`. Mark unopened facts UNVERIFIED and relay the mark unchanged.
-- **Flatiron outages are temporary.** A model dying mid-run is an outage, not a quality failure. A routing child probes gateway health once per batch with `models --refresh`. Wait at most 30 minutes for flatiron to come back. Still down: ask the user before any work runs on a paid provider. A retry that failed only because flatiron was down is not an escalation. Flag every fallback landing in the report.
+- **Flatiron outages are temporary.** A model dying mid-run is an outage, not a quality failure. A routing child probes gateway health once per batch with `models --refresh`. Wait at most 30 minutes for flatiron to come back. Still down: a paid model runs as the last resort, flagged in the report. A retry that failed only because flatiron was down is not an escalation. Flag every fallback landing in the report.
 - **Fast mode once the work is small.** Cut a final fix round into parallel deliverables in one batch. Doc-only deliverables get no build. Code changes rebuild only their own targets and run each rebuilt binary in full. Build detail for C++: `references/cpp-build-test-pitfalls.md`. The report names what was not run and why.
 - **Builds run at the lowest priority.** Every build brief says: run with `nice -n 19 ionice -c 3 <cmd>`. Launch the `hermes chat` child under `nice -n 19` too. A control subagent can renice running children in place.
 - **Test small first, then expand.** Start with the smallest batch that can answer the question. Exactly one named expansion per deliverable when the small batch is inconclusive. A full sweep is never the first step.

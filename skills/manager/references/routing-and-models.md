@@ -32,7 +32,7 @@ A numeric claim that stays identical before and after the reported edit fails ar
 
 ## Dispatch waves
 
-Each dispatch wave names the tier and the quota class of every lane in the report. A move to a paid or subscription model is a named escalation that needs the user's approval. A paid lane states its escalation reason.
+Each dispatch wave names the tier and the quota class of every lane in the report. A move to a paid or subscription model is an escalation. The user names the model for the task. Else the move is a last resort after every eligible free flatiron model failed or none is healthy. A paid lane states its escalation reason.
 
 ## UI deliverables
 

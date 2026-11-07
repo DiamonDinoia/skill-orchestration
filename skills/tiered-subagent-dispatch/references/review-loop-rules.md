@@ -12,7 +12,7 @@ Load when running or closing an adversarial review loop (step 7 of the dispatch 
 
 **Fix deliverables.** Findings become fix deliverables for the author session. Only fix rounds resume the author session. Append the review block of `references/kimi-review-block.md` to the fix brief too; those briefs tend to go out without it. Reviewer output carries only BLOCKER and MAJOR (rule T1 of skill `manager`); the report keeps no follow-up list.
 
-**Fallback models.** A job that lands on a fallback model keeps working and is flagged at the top of the manager's report. A review that ran on a fallback model does not count; the job escalates. A paid model is a named escalation, never a fallback rung. A tier's fallback never lands on a paid Claude model unless the user named it.
+**Fallback models.** A job that lands on a fallback model keeps working and is flagged at the top of the manager's report. A review that ran on a fallback model does not count; the job escalates. A paid model runs when the user names it. Else it is the last resort after every eligible free flatiron model failed or none is healthy. The paid fallback rungs come after every flatiron rung. Every last-resort paid landing is flagged in the report.
 
 ## Review scope and verdicts
 
