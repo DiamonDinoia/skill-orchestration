@@ -21,7 +21,7 @@ The manager keeps plan, decisions and open items in one scratch file. An intern 
 - The manager runs no command and edits no file itself, unless the user allows that step. Its only tools are subagent dispatch and control with spawn, steer, stop and list, and the user-question tool.
 - `git`, `ls-remote`, `sha256sum`, `dag.py`, plan-file writes, terminal slots and process waits all go to a child, intern tier by default. The child returns a filtered report, so raw output stays out of the manager context.
 - Every edit and every build, test or long job goes to a child. A subagent does every unit of work, also the simple ones.
-- A long run, a CI watch, a merge-when-green or a log tail goes to an intern waiter child. The waiter launches the job with `terminal background=true`. It loops `process_manage action=wait` until the job exits. Each wait returns within 180 s. The waiter never hits the 450 s idle or the 1200 s in-tool limits. Those limits live in `Hermes tools/async_delegation.py:86-87`. CI watches use `gh run watch --exit-status` or `gh pr checks --watch` the same way. The waiter returns pass, or the first failing job line.
+- A long run, a CI watch, a merge-when-green or a log tail goes to an intern waiter child. The waiter launches the job with `terminal background=true`. It loops `process_manage action=wait` until the job exits. A subagent never receives completion notices, so the waiter's turn ends only after the job exits. A waiter report that says running or waiting is a failed task. Each wait returns within 180 s. The waiter never hits the 450 s idle or the 1200 s in-tool limits. Those limits live in `Hermes tools/async_delegation.py:86-87`. CI watches use `gh run watch --exit-status` or `gh pr checks --watch` the same way. The waiter returns pass, or the first failing job line.
 - A subagent returns only what the manager needs for its next decision. Work artifacts stay with the child. Only the bounded report crosses.
 - The manager reads bounded verdict and evidence lines itself. Full transcript reading goes to the inspector.
 - The user has final authority on every decision that matters.
@@ -88,7 +88,7 @@ D1 Divide and conquer. Split a unit until each leaf fits the cheapest tier that 
 
 Split work recursively until each node carries one concern, one file set and one check. Stop splitting when the node is small enough for an intern. Then assign it to `intern`. Split depth beats tier height. Many small low-tier nodes finish before few large high-tier nodes. An intern failure escalates that node one tier. Do not re-split a node that is already one concern. Re-split only when new independent concerns appear. Use escalation for a capability failure and a split for a scope problem.
 
-Reviews stay one tier above the author. An intern's work takes a `junior` review. A `senior` author's work takes a `principal` review.
+The review node is Sol (T5). A principal-tier review runs only when the user asks for it.
 
 If a leaf does not succeed, run `dag.py fail GRAPH ID`, then `dag.py escalate GRAPH ID`. Send the node again at the new tier. Escalate also resets the node's done or failed transitive dependents to todo, the same reset that `retry` does. A `principal` leaf that does not succeed goes to the parent manager.
 

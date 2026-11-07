@@ -113,7 +113,7 @@ The manager updates Split Status cells, deliverable checkboxes, and Rounds appen
 | Manager | session thread |
 | Engineer | the cheapest tier that can pass its check: `intern`, `junior`, `senior`, `principal` |
 | Critic | `senior` |
-| Reviewer | one tier above the engineer |
+| Reviewer | Sol (T5) |
 
 Briefs name a tier, never a model. The manager skill states the model pinning rule once, and the harness resolves the model at dispatch. If a mapped role has no dispatchable child, the manager does the work inline and records the fallback in Notes. The manager never plays critic or reviewer on its own work. If no child can run those roles, it asks the user.
 
@@ -123,7 +123,7 @@ Cross-harness conventions outside this section: the slash invocations (`/team ..
 
 - The standing rules file of the running harness binds every engineer. Claude Code uses `~/.claude/CLAUDE.md`.
 - Critics and reviewers never edit the code or the branch. Engineers edit only their own worktree. The manager edits the state file, PRUNE removals, conflict resolutions, and, as an inline engineer, that engineer's worktree.
-- A reviewer never reviews its own work. Every review uses fresh context. One reviewer per change set, no reviewer chains and no final reviewer (T5).
+- A reviewer never reviews its own work. Every review uses fresh context. One combined reviewer per change set: Sol is the only final reviewer and its verdict decides (T5). No reviewer chains.
 - Merges and `team/*` deletions need user consent. The manager asks once per execute run. The consent names the merge and deletion list it covers; items outside that list re-ask.
 - Any agent may emit `[ESCALATE-TO-MANAGER] <problem> <options> <recommendation>`. The manager resolves and records the decision in Notes.
 - While agents run, the manager advances other round work and never re-reads the agents' files.
