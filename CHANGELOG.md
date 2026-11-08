@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.0
+- Dispatch: per-task routing fields (`pin_model`, `needs`) and multi-model recon in the manager brief.
+- Manager: Sol is the permanent final reviewer; the tier-review ladder is dropped and a waiter-turn rule takes its place.
+- Paid models run only through an explicit pin, after flatiron fails; they are never the default.
+- Version fields are 2.3.0 in every manifest and skill.
+
 ## 2.2.2
 - Routing: sync fallbacks stay in the quota-free pool (flatiron-only); unknown reasoning effort names warn and fall back instead of crashing.
 
