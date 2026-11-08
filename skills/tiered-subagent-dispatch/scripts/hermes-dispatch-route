@@ -2,11 +2,11 @@
 """Model routing for the Hermes manager / tiered-subagent-dispatch workflow (Hermes only).
 
   hermes-dispatch-route status [--refresh]           flatiron health + resolved latest Claude/OpenAI ids
-  hermes-dispatch-route pick KIND [--tier T] [--failed MODEL ...] [--needs F[,F...]] [--refresh]
+  hermes-dispatch-route pick KIND [--tier T] [--failed MODEL ...] [--needs F[,F...]] [--refresh] [--pin MODEL]
                                                      -> JSON {provider, model, reason, flags, skipped}
-  hermes-dispatch-route lanes KIND [--tier T] [--needs F[,F...]] [--failed M[,...]]
-                                                     -> JSON line: every eligible flatiron lane, one
-                                                        "{fallback: true}" entry when none fits
+  hermes-dispatch-route lanes KIND [--tier T] [--needs F[,F...]] [--failed M[,...]] [--pin MODEL]
+                                                     -> JSON line: every eligible flatiron lane;
+                                                        no free fit prints one "blocked:" line, exit 3
   hermes-dispatch-route assign NODE=KIND:TIER[:NEED,NEED] ...
                                                      -> JSON list, one entry per node: the eligible
                                                         flatiron model with the fewest in-flight jobs
@@ -20,14 +20,21 @@ TIER: intern | junior | senior | principal (principal takes only a listed model 
 
 Escalation rule (user's standing order): pick the best HEALTHY flatiron model listed for the task kind.
 When a model fails, the next pick is a flatiron model STRICTLY STRONGER (higher RANK) than every
-failed one that is healthy; if none exists, the next Claude rung of the tier's fallback list in
-ROUTING_FILE (intern: Haiku, Sonnet; junior: Haiku, Sonnet, Opus; senior: Sonnet, Opus; principal: Opus).
-A failed Claude rung is never retried and the walk never steps down. Capabilities / model are in the
-ROUTING_FILE "features" map: features[model] = {vision, web, probed}; --needs F requires every
-named feature true (a model with no entry has no features; `pick vision` means `--needs vision`).
-The Claude rungs read features[haiku|sonnet|opus] through the same filter (built-in defaults when the json lacks the key).
+failed one that is healthy. No free fit is `blocked`: one line with the healthy free models and their
+features plus the paid models marked "pin only", and exit code 3. Quota rule (user rule 2026-11-07):
+paid models (Claude, OpenAI) run only through an explicit model pin. `--pin MODEL` is that pin
+(delegate_task calls it `pin_model`): MODEL is an exact id or the family haiku|sonnet|opus|sol,
+resolved through `latest`; every other id is served on flatiron. pick, lanes and assign return a
+paid model only for that pin. A failed model is never retried and the walk never steps down.
+Capabilities / model are in the ROUTING_FILE "features" map: features[model] = {vision, web, probed};
+--needs F requires every named feature true (a model with no entry has no features; `pick vision`
+means `--needs vision`). The blocked line reads features[haiku|sonnet|opus] through the same filter
+(built-in defaults when the json lacks the key).
 Flags: --reasoning EFFORT only on a flatiron pick, clamped to the efforts the model accepts (efforts map in ROUTING_FILE); -s SKILL per tier skill on every pick.
 Ranks, per-kind preferences and tiers live in ROUTING_FILE (JSON) so they can be tuned without editing code.
+ROUTING_FILE resolves over HERMES_DISPATCH_ROUTING_FILE, the references/ dir beside this script's
+skill, then the install layouts under ~/.hermes/skills. A missing or unreadable file exits non-zero
+and prints the paths it tried; there is no silent built-in table.
 No per-model job cap: a model takes every parallel job that fits its eligibility, and `assign` spreads a batch by the in-flight count.
 The old key principal_min_rank is removed and ignored: principal is the top 3 rank values of the
 listed models, and a model the gateway lists no more drops out of the rank map after 7 days.
@@ -39,8 +46,28 @@ HERMES_HOME = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
 CACHE = HERMES_HOME / "cache" / "dispatch-route.json"
 # The selftest gate validates a candidate routing file through this explicit override.
 ROUTING_OVERRIDE = "HERMES_DISPATCH_ROUTING_FILE"
-ROUTING_FILE = Path(os.environ.get(ROUTING_OVERRIDE) or
-                    HERMES_HOME / "skills" / "autonomous-ai-agents" / "tiered-subagent-dispatch" / "references" / "flatiron-routing.json")
+ROUTING_NAME = "flatiron-routing.json"
+# A blocked pick/lanes/assign run exits with this code (0 = JSON answer, 1 = hard error).
+BLOCKED_EXIT = 3
+
+
+class RoutingFileError(Exception):
+    """No readable routing file. Fatal on purpose: a silent built-in table once sent every need
+    to paid rungs after the skill changed install layout."""
+
+
+def routing_candidates():
+    """Every place the routing file may live, in resolution order: the explicit override, the
+    references/ dir beside this script's skill scripts/ dir, then the known install layouts."""
+    here = Path(__file__).resolve()
+    cands = [Path(os.environ[ROUTING_OVERRIDE])] if os.environ.get(ROUTING_OVERRIDE) else []
+    cands += [here.parent.parent / "references" / ROUTING_NAME,
+              HERMES_HOME / "skills" / "tiered-subagent-dispatch" / "references" / ROUTING_NAME,
+              HERMES_HOME / "skills" / "autonomous-ai-agents" / "tiered-subagent-dispatch" / "references" / ROUTING_NAME]
+    return list(dict.fromkeys(cands))  # one entry per path, resolution order kept
+
+
+ROUTING_FILE = next((p for p in routing_candidates() if p.is_file()), routing_candidates()[0])
 # Backups, lock and reject state stay outside the skill dir so tracked content stays clean.
 SIDECAR_DIR = HERMES_HOME / "cache" / "dispatch-route"
 BASE = "https://inference.flatironinstitute.org/v1"
@@ -65,16 +92,18 @@ DEFAULT_ROUTING = {"rank": {}, "routes": {},
 
 
 def routing():
+    """The routing table from ROUTING_FILE. A missing or unreadable file raises RoutingFileError
+    with the paths it tried; DEFAULT_ROUTING never stands in for the real table."""
+    tried = ", ".join(str(p) for p in dict.fromkeys([ROUTING_FILE, *routing_candidates()]))
     try:
         cfg = json.loads(ROUTING_FILE.read_text())
-        if isinstance(cfg, dict) and isinstance(cfg.get("rank"), dict) and isinstance(cfg.get("routes"), dict):
-            return cfg
-        print(f"hermes-dispatch-route: {ROUTING_FILE} lacks rank/routes; using built-in table", file=sys.stderr)
-    except OSError:
-        pass
+    except OSError as e:
+        raise RoutingFileError(f"hermes-dispatch-route: no readable routing file ({e.strerror}); tried {tried}") from e
     except ValueError as e:
-        print(f"hermes-dispatch-route: {ROUTING_FILE} is invalid JSON ({e}); using built-in table", file=sys.stderr)
-    return DEFAULT_ROUTING
+        raise RoutingFileError(f"hermes-dispatch-route: {ROUTING_FILE} is invalid JSON ({e}); tried {tried}") from e
+    if not (isinstance(cfg, dict) and isinstance(cfg.get("rank"), dict) and isinstance(cfg.get("routes"), dict)):
+        raise RoutingFileError(f"hermes-dispatch-route: {ROUTING_FILE} lacks rank/routes; tried {tried}")
+    return cfg
 
 
 def load_cache():
@@ -390,16 +419,52 @@ def flatiron_lanes(kind, tier, failed, needs, cfg, health, skipped):
     yield from got
 
 
-def pick(kind, tier, failed, refresh, needs=None):
+def _pinned(pin, latest):
+    """The caller named this model explicitly (delegate_task: pin_model): return it. A family
+    name resolves through latest; every other id is served on flatiron."""
+    fam = pin.strip().lower()
+    if fam in ("haiku", "sonnet", "opus"):
+        return CLAUDE, claude_id(latest, fam)
+    if fam == "sol":
+        if not latest.get("sol"):
+            sys.exit("hermes-dispatch-route: no live id for family 'sol'; check `hermes auth`")
+        return "openai-codex", latest["sol"]
+    for f in ("haiku", "sonnet", "opus"):
+        if latest.get(f) == pin:
+            return CLAUDE, pin
+    return ("openai-codex", pin) if latest.get("sol") == pin else ("flatiron", pin)
+
+
+def blocked_line(kind, tier, failed, needs, cfg, health, latest):
+    """The one blocked report: healthy free models with their features, paid models marked pin
+    only. The manager decides what runs next (quota rule of the skill `manager`)."""
+    feats = {**DEFAULT_ROUTING["features"], **(cfg.get("features") or {})}
+
+    def f(m):
+        return ", ".join(f"{k}={str(v).lower()}" for k, v in sorted((feats.get(m) or {}).items())) or "no features"
+
+    free = ", ".join(f"{m} ({f(m)})" for m in by_rank([m for m in health if health.get(m, {}).get("ok")], cfg["rank"]))
+    paid = ", ".join(f"{latest.get(fam)} ({f(fam)})" for fam in ("haiku", "sonnet", "opus", "sol") if latest.get(fam))
+    want = kind + (f" --needs {','.join(needs)}" if needs else "")
+    return (f"blocked: no free model fits {want} at tier {tier}"
+            + (f" after {','.join(sorted(failed))} failed" if failed else "")
+            + f". Available models. healthy flatiron: {free or 'none'}; paid (pin only): {paid or 'none'}")
+
+
+def pick(kind, tier, failed, refresh, needs=None, pin=None):
     cfg, tcfg, needs = _pick_setup(kind, tier, needs)
     health = flatiron_status(refresh)
     latest = resolve_latest()
     failed = {m for arg in (failed or []) for m in arg.split(",") if m}  # --failed MODEL ... or MODEL,... list
-    failed_fams = {fam for fam in ("haiku", "sonnet", "opus")
-                   if any(fam in m for m in failed if "/" not in m)}
     floor = max((cfg["rank"].get(m, 0) for m in failed if m in cfg["rank"]), default=0)
     skipped = []
     skill_flags = "".join(f" -s {s}" for s in tcfg.get("skills", []))
+    if pin:  # the caller named the model: the only way pick returns a paid model
+        provider, model = _pinned(pin, latest)
+        flags = (_flatiron_flags(model, tcfg, cfg) if provider == "flatiron"
+                 else f"--provider {provider} -m {model}{skill_flags}")
+        return {"provider": provider, "model": model, "flags": flags,
+                "reason": f"explicit pin {pin}", "skipped": skipped}
     m = next(iter(flatiron_lanes(kind, tier, failed, needs, cfg, health, skipped)), None)
     if m is not None:
         led_fb = _ledger_fb_note(skipped)
@@ -407,41 +472,22 @@ def pick(kind, tier, failed, refresh, needs=None):
                 "flags": _flatiron_flags(m, tcfg, cfg),
                 "reason": f"best healthy flatiron model for {kind}" + (f" stronger than failed rank {floor}" if floor else "") + led_fb,
                 "skipped": skipped}
-    # json entries win over the built-in Claude defaults; a missing key falls back to its default
-    feats = {**DEFAULT_ROUTING["features"], **(cfg.get("features") or {})}
-    # Vision puts Haiku (reads images) first, except for principal, which never gets Haiku.
-    fams = tcfg["fallback"]
-    if kind == "vision" and tier != "principal":
-        fams = ["haiku"] + [f for f in fams if f != "haiku"]
-    # Monotonic: resume after the highest failed rung, never step back down.
-    order = ["haiku", "sonnet", "opus"]
-    top = max((order.index(f) for f in failed_fams), default=-1)
-    fams = [f for f in fams if order.index(f) > top and all((feats.get(f) or {}).get(n) for n in needs)]
-    dead = _ledger_dead(kind)
-    # never call claude_id in the filter: a family with no live id must skip the rung, not exit
-    resolved = [f for f in fams if latest.get(f)]
-    live = [f for f in resolved if not dead.get(_norm_model(latest[f]))]
-    # a dead resolved rung may serve; fams last keeps the claude_id error when nothing resolved
-    fams = live or resolved or fams  # the demotion is advisory when it would drop every rung: never return nothing
-    if fams:
-        fam = fams[0]
-        model = claude_id(latest, fam)
-        return {"provider": CLAUDE, "model": model,
-                "flags": f"--provider {CLAUDE} -m {model}{skill_flags}",
-                "reason": f"no suitable healthy flatiron model; tier {tier} fallback rung: latest {fam.capitalize()}",
-                "skipped": skipped}
+    # No implicit paid fallback (quota rule): a no-fit pick reports blocked, never a paid rung.
     return {"provider": None, "model": None, "flags": None,
-            "reason": f"tier {tier} ladder exhausted" + (
-                f" ({', '.join(sorted(failed_fams))} failed)" if failed_fams else "") + ": escalate to the user",
+            "reason": blocked_line(kind, tier, failed, needs, cfg, health, latest),
             "skipped": skipped}
 
 
-def lanes(kind, tier, failed, needs):
+def lanes(kind, tier, failed, needs, pin=None):
     """Every flatiron lane pick would serve for this batch, one entry per model in pick order,
-    each with the flags its lane job runs. No model fits: one entry, the fallback rung pick
-    returns, marked "fallback": true. The ladder exhausted: an empty list. Health: cached probe."""
+    each with the flags its lane job runs. No free fit: an empty list, and the CLI reports
+    blocked. Health: cached probe."""
     cfg, tcfg, needs = _pick_setup(kind, tier, needs)
     health = flatiron_status(False)
+    if pin:
+        p = pick(kind, tier, failed, False, needs, pin)
+        return [{"provider": p["provider"], "model": p["model"], "flags": p["flags"],
+                 "rank": cfg["rank"].get(p["model"]), "reason": p["reason"]}]
     sk = []
     out = [{"provider": "flatiron", "model": m, "flags": _flatiron_flags(m, tcfg, cfg),
             "rank": cfg["rank"].get(m)}
@@ -449,10 +495,7 @@ def lanes(kind, tier, failed, needs):
     note = f"best healthy flatiron model for {kind}" + _ledger_fb_note(sk)
     for x in out:
         x["reason"] = note
-    if out:
-        return out
-    fb = pick(kind, tier, failed, False, needs)
-    return [dict(fb, fallback=True)] if fb["provider"] else []
+    return out
 
 
 def by_rank(models, rank):
@@ -552,7 +595,7 @@ def assign(specs):
     """Load-balanced batch pick: every node takes its eligible model with the fewest in-flight
     jobs (ties in pick order) and raises that model's running count before the next node, so one
     batch spreads over the eligible set. No model cap: a model serves every node that fits its
-    eligibility. A node with no eligible model gets the fallback rung."""
+    eligibility. A node with no eligible model gets the blocked line and no model."""
     counts = inflight_counts()
     out = []
     for node, kind, tier, needs in specs:
@@ -571,9 +614,9 @@ def assign(specs):
                         "reason": reason,
                         "fallback": False})
         else:
-            fb = pick(kind, tier, [], False, needs)
-            out.append({"node": node, "kind": kind, "tier": tier, "provider": fb["provider"],
-                        "model": fb["model"], "flags": fb["flags"], "load": 0,
+            fb = pick(kind, tier, [], False, needs)   # blocked line; no model and no paid rung
+            out.append({"node": node, "kind": kind, "tier": tier, "provider": None,
+                        "model": None, "flags": None, "load": 0,
                         "reason": fb["reason"], "fallback": True})
     return out
 
@@ -1160,9 +1203,11 @@ def main():
     p = sub.add_parser("pick"); p.add_argument("kind"); p.add_argument("--tier", default="intern")
     p.add_argument("--failed", nargs="*", default=[]); p.add_argument("--refresh", action="store_true")
     p.add_argument("--needs", default="", help="comma list of required features, e.g. vision,web")
+    p.add_argument("--pin", default=None, help="the caller's explicit model pin (pin_model): an exact id or haiku|sonnet|opus|sol")
     ln = sub.add_parser("lanes"); ln.add_argument("kind"); ln.add_argument("--tier", default="intern")
     ln.add_argument("--failed", nargs="*", default=[])
     ln.add_argument("--needs", default="", help="comma list of required features, e.g. vision,web")
+    ln.add_argument("--pin", default=None, help="the caller's explicit model pin (pin_model): an exact id or haiku|sonnet|opus|sol")
     g = sub.add_parser("assign"); g.add_argument("nodes", nargs="+", metavar="NODE=KIND:TIER[:NEED,NEED]")
     l = sub.add_parser("latest"); l.add_argument("family", choices=["opus", "sonnet", "sol", "haiku"])
     l.add_argument("--refresh", action="store_true")
@@ -1177,11 +1222,19 @@ def main():
         print(json.dumps({"flatiron": flatiron_status(a.refresh), "latest": {k: v for k, v in resolve_latest(a.refresh).items() if k != "at"}}, indent=1))
     elif a.cmd == "pick":
         needs = [n.strip() for n in a.needs.split(",") if n.strip()]
-        print(json.dumps(pick(a.kind, a.tier, a.failed, a.refresh, needs), indent=1))
+        out = pick(a.kind, a.tier, a.failed, a.refresh, needs, a.pin)
+        if out["model"] is None:
+            print(out["reason"])                     # the blocked line, then the distinct exit code
+            return BLOCKED_EXIT
+        print(json.dumps(out, indent=1))
     elif a.cmd == "lanes":
         needs = [n.strip() for n in a.needs.split(",") if n.strip()]
         failed = [m for arg in a.failed for m in arg.split(",") if m]  # --failed MODEL ... or a comma list
-        print(json.dumps(lanes(a.kind, a.tier, failed, needs)))  # one line: the manager greps it into lane jobs
+        out = lanes(a.kind, a.tier, failed, needs, a.pin)
+        if not out:
+            print(pick(a.kind, a.tier, failed, False, needs)["reason"])
+            return BLOCKED_EXIT
+        print(json.dumps(out))  # one line: the manager greps it into lane jobs
     elif a.cmd == "assign":
         specs = []
         for spec in a.nodes:
@@ -1191,10 +1244,19 @@ def main():
                 sys.exit(f"assign: bad node spec {spec!r}; want NODE=KIND:TIER[:NEED,NEED]")
             needs = [n.strip() for n in parts[2].split(",") if n.strip()] if len(parts) == 3 else []
             specs.append((node, parts[0], parts[1], needs))
-        print(json.dumps(assign(specs), indent=1))
+        out = assign(specs)
+        blocked = [e for e in out if not e["model"]]
+        if blocked:
+            for e in blocked:
+                print(e["reason"])
+            return BLOCKED_EXIT
+        print(json.dumps(out, indent=1))
     else:
         print(claude_id(resolve_latest(a.refresh), a.family))
 
 
 if __name__ == "__main__":
-    sys.exit(main() or 0)
+    try:
+        sys.exit(main() or 0)
+    except RoutingFileError as e:
+        sys.exit(str(e))  # non-zero exit; the message carries the paths tried
