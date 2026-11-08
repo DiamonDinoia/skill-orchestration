@@ -1802,6 +1802,64 @@ def check_pin_returns_paid():
     assert [x["model"] for x in json.loads(ln.stdout)] == ["fixture-sonnet"], ln.stdout
 
 
+def check_pin_non_latest_paid():
+    """P1: a pinned paid id resolves to its provider even when it is not the latest of its
+    family. The provider comes from the model id, never the flatiron default."""
+    for pin, prov in (("claude-sonnet-8", "claude-subscription-directsdk-experimental"),
+                      ("gpt-5.5-sol", "openai-codex")):
+        p = _cli(["pick", "code", "--tier", "intern", "--pin", pin])
+        assert p.returncode == 0, (pin, p.returncode, p.stderr[-300:])
+        out = json.loads(p.stdout)
+        assert (out["provider"], out["model"]) == (prov, pin), (pin, out)
+    ln = _cli(["lanes", "code", "--tier", "intern", "--pin", "claude-sonnet-8"])
+    assert [(x["provider"], x["model"]) for x in json.loads(ln.stdout)] \
+        == [("claude-subscription-directsdk-experimental", "claude-sonnet-8")], ln.stdout
+
+
+def check_pin_unknown_id():
+    """P2: `--pin` with an id the routing file does not know exits non-zero with a clear
+    error. It never falls through to flatiron."""
+    for cmd in (["pick", "code", "--tier", "intern", "--pin", "mystery-model"],
+                ["lanes", "code", "--tier", "intern", "--pin", "mystery-model"],
+                ["pick", "code", "--tier", "intern", "--pin", "claude-fable-1"]):
+        p = _cli(cmd)
+        assert p.returncode != 0, (cmd, p.returncode, p.stdout)
+        assert "unknown" in p.stderr and "pin" in p.stderr, (cmd, p.stderr)
+        assert not p.stdout.strip(), (cmd, p.stdout)
+
+
+def check_pin_failed_blocked():
+    """P3: a pinned model in --failed prints the blocked line naming the pin and the reason
+    and exits 3. pick and lanes never substitute another model."""
+    cases = [(["pick", "code", "--tier", "intern", "--failed", "fixture-sonnet", "--pin", "sonnet"], "fixture-sonnet"),
+             (["pick", "code", "--tier", "intern", "--failed", "fixture-sonnet", "--pin", "fixture-sonnet"], "fixture-sonnet"),
+             (["pick", "code", "--tier", "intern", "--failed", "claude-sonnet-8", "--pin", "claude-sonnet-8"], "claude-sonnet-8"),
+             (["lanes", "code", "--tier", "intern", "--failed", "fixture-sonnet", "--pin", "sonnet"], "fixture-sonnet")]
+    for cmd, named in cases:
+        p = _cli(cmd)
+        assert p.returncode == 3, (cmd, p.returncode, p.stdout, p.stderr)
+        assert p.stdout.startswith("blocked:") and named in p.stdout, (cmd, p.stdout)
+        assert "failed" in p.stdout, (cmd, p.stdout)                # the reason names the exclusion
+        assert '"model"' not in p.stdout, (cmd, p.stdout)           # never a substitute
+
+
+def check_pin_needs_blocked():
+    """P4: a pinned model that lacks a needed feature prints the blocked line naming the pin
+    and exits 3. `pick vision --pin Qwen...` with Qwen vision false never returns Qwen."""
+    table = json.loads(_CLI_TABLE)
+    table["features"] = {QWEN: {"vision": False, "web": False}}
+    routing = json.dumps(table)
+    cases = [(["pick", "vision", "--pin", QWEN], QWEN, "vision"),
+             (["lanes", "vision", "--pin", QWEN], QWEN, "vision"),
+             (["pick", "code", "--tier", "intern", "--needs", "web", "--pin", QWEN], QWEN, "web")]
+    for cmd, named, feat in cases:
+        p = _cli(cmd, routing=routing)
+        assert p.returncode == 3, (cmd, p.returncode, p.stdout, p.stderr)
+        assert p.stdout.startswith("blocked:") and named in p.stdout, (cmd, p.stdout)
+        assert feat in p.stdout, (cmd, p.stdout)                    # the reason names the missing feature
+        assert '"model"' not in p.stdout, (cmd, p.stdout)           # never a substitute
+
+
 if __name__ == "__main__":
     check_route(); check_tiers(); check_effort_clamp(); check_effort_round_down(); check_effort_unknown_names(); check_lanes(); check_needs(); check_default_features()
     check_probe_fallback()
@@ -1821,4 +1879,5 @@ if __name__ == "__main__":
     check_discovery_failure_names_family()
     check_failed_comma_list()
     check_new_skill_layout(); check_routing_file_missing(); check_blocked_no_paid(); check_pin_returns_paid()
+    check_pin_non_latest_paid(); check_pin_unknown_id(); check_pin_failed_blocked(); check_pin_needs_blocked()
     print("selftest OK")
