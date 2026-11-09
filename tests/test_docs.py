@@ -1,6 +1,8 @@
 """Doc pins for INSTALL.md and README.md: the install rules of INSTALL.md, the
-README pointer, and the tokens the install must never bring back. One observed
-negative per pin: each mutation removes one rule and the pin must fail loud.
+README pointer, and the tokens the install must never bring back. It also keeps
+the three retired routing claims out of the tiered-subagent-dispatch docs. One
+observed negative per pin: each mutation removes one rule and the pin must fail
+loud.
 
 Runs standalone (python3 tests/test_docs.py) and under pytest.
 """
@@ -90,6 +92,23 @@ README_RULES = {
     "version heading": ("## Version 2.3.1",),
 }
 
+# The retired routing claims that must stay out of the tiered-subagent-dispatch
+# docs. Value: the file the claim was retired from and the token that names the
+# claim. The guard scans every markdown file of the skill. Each mutation
+# reinserts the token after the anchor of the retired file.
+TIERED_SKILL = "skills/tiered-subagent-dispatch"
+TIERED_SKILL_MD = TIERED_SKILL + "/SKILL.md"
+TIERED_MECHANICS_MD = TIERED_SKILL + "/references/routing-mechanics.md"
+RETIRED_CLAIMS = {
+    "no qwen-first pick": (TIERED_MECHANICS_MD, "fastest Qwen"),
+    "no principal anchor-first": (TIERED_SKILL_MD, "anchor-first"),
+    "no sync outage default": (TIERED_SKILL_MD, "sync` keeps the pinned flatiron default"),
+}
+TIERED_ANCHORS = {
+    TIERED_SKILL_MD: "## Ladder (per deliverable)\n",
+    TIERED_MECHANICS_MD: "## `pick` and `lanes`\n",
+}
+
 
 def install_findings(text):
     """One finding per missing or broken INSTALL.md rule; empty when complete."""
@@ -145,6 +164,24 @@ def script_absence_findings(root):
     return findings
 
 
+def tiered_claim_findings(text, name, token):
+    """Findings for one retired claim in one doc; empty when the token stays out."""
+    return [f"brings back the {name} claim: {token!r}"] if token in text else []
+
+
+def tiered_docs_findings(root=REPO_ROOT):
+    """One finding per retired claim that came back in a tiered-subagent-dispatch doc."""
+    root = Path(root)
+    findings = []
+    docs = sorted(set(root.glob(TIERED_SKILL + "/*.md")) | set(root.glob(TIERED_SKILL + "/**/*.md")))
+    for path in docs:
+        text = path.read_text()
+        for name, (rel, token) in RETIRED_CLAIMS.items():
+            if token in text:
+                findings.append(f"{path.relative_to(root).as_posix()} brings back the {name} claim: {token!r}")
+    return findings
+
+
 def drop_lines(text, *needles):
     lines = text.splitlines(keepends=True)
     kept = [ln for ln in lines if not any(n in ln for n in needles)]
@@ -173,6 +210,11 @@ def build_mutations():
     for rule, phrases in README_RULES.items():
         mutations.append((rule, "README.md", readme_findings,
                           lambda root, t, ph=phrases: drop_lines(t, *ph)))
+    for name, (rel, token) in RETIRED_CLAIMS.items():
+        anchor = TIERED_ANCHORS[rel]
+        mutations.append((name, rel,
+                          lambda t, n=name, tk=token: tiered_claim_findings(t, n, tk),
+                          lambda root, t, a=anchor, tk=token: t.replace(a, a + tk + "\n", 1)))
     return mutations
 
 
@@ -180,6 +222,7 @@ def test_install_pins_pass_on_the_repo_files():
     assert install_file_findings(REPO_ROOT) == [], install_file_findings(REPO_ROOT)
     assert readme_findings(README.read_text()) == [], readme_findings(README.read_text())
     assert script_absence_findings(REPO_ROOT) == [], script_absence_findings(REPO_ROOT)
+    assert tiered_docs_findings() == [], tiered_docs_findings()
 
 
 def test_install_pins_fail_when_the_rule_is_removed(tmp_path):
@@ -193,7 +236,9 @@ def test_install_pins_fail_when_the_rule_is_removed(tmp_path):
             original = (REPO_ROOT / rel).read_text()
             mutated = mutate(root, original)
             assert mutated != original, f"the {name} mutation did nothing"
-            (root / rel).write_text(mutated)
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(mutated)
             findings = check(root) if check is script_absence_findings else check(mutated)
         state = "failed-loud" if findings else "SILENT PASS"
         print(f"mutation: {name} removed -> {state}: {findings}")
@@ -205,9 +250,9 @@ def test_install_pins_fail_when_the_rule_is_removed(tmp_path):
 def main():
     tmp = Path(tempfile.mkdtemp(prefix="doc-pins-"))
     mutations = build_mutations()
-    pins = len(INSTALL_RULES) + len(FORBIDDEN_TOKENS) + len(README_RULES) + 2
+    pins = len(INSTALL_RULES) + len(FORBIDDEN_TOKENS) + len(README_RULES) + len(RETIRED_CLAIMS) + 2
     print(f"pins: {pins} (install rules {len(INSTALL_RULES)}, forbidden {len(FORBIDDEN_TOKENS)}, "
-          f"readme rules {len(README_RULES)}, pointer + script absence 2)")
+          f"readme rules {len(README_RULES)}, retired claims {len(RETIRED_CLAIMS)}, pointer + script absence 2)")
     test_install_pins_pass_on_the_repo_files()
     test_install_pins_fail_when_the_rule_is_removed(tmp)
     print(f"mutations: {len(mutations)}/{len(mutations)} failed loud")
