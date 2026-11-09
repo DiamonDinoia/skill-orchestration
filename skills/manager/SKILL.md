@@ -101,7 +101,7 @@ The manager names the skills each deliverable needs. A missing one goes in an in
 
 A child on a quota-free model may get the `team` and `brainstorm` skills and spawn children up to the harness depth limit. A paid-quota child never spawns children. Every level obeys the same tier, brief and report rules. A child that cannot ask the user escalates user-question steps to its parent. A team run inside a child keeps the team skill's not-supported sentence. Assign `team` only to a child that can still spawn. Otherwise split the work into leaf deliverables.
 
-The paid subscription model sleeps while a quota-free child can do the work. A charge on the subscription model that no escalation justified is a dispatch defect. The user sees it directly in usage. Dispatch every wave to the cheapest tier that can do the job. Name the paid model only as an explicit escalation with its reason. The rule covers wait-and-relay children as hard as workers. A waiting child still bills its own model each turn it is woken. The pin check on the first report line applies to launchers too.
+The ladder moves to a paid model only after the strongest fitting flatiron model fails, cheapest first: haiku, sonnet, opus. A paid charge that the ladder did not justify is a dispatch defect. The user sees it directly in usage. Dispatch every wave to the cheapest tier that can do the job. The report flags every paid landing. The rule covers wait-and-relay children as hard as workers. A waiting child still bills its own model each turn it is woken. The pin check on the first report line applies to launchers too.
 
 ## Parallel
 
