@@ -1,5 +1,6 @@
 {
- "_doc": "Manager-owned HINTS for ~/.local/bin/hermes-dispatch-route. The model set comes from the gateway's live /models listing; this file only orders it. rank = general strength (escalation moves only to a strictly stronger flatiron model; with no free fit the router reports blocked and the paid rungs are pin only). routes = per-kind preference order. features[model] = {vision, web, probed}: probed capabilities; probed is the date of the last successful probe. The bare keys haiku/sonnet/opus describe the paid rungs (pin only). `pick KIND --needs f1,f2` keeps only models whose features entry has every named feature true (no entry = no capabilities); `pick vision` means `--needs vision`. sync probes features for new healthy listed models and ranks listed unranked models; entries for models the gateway no longer lists are ignored. floors maps kind to anchor model id. A new or returning model enters that kind only when at least as strong as the anchor. A missing floors entry closes code, debug, research or frontend to new models. prose and mechanical have no floor. An anchor out of the rank map closes that kind to new models.",
+ "_doc": "Manager-owned HINTS for ~/.local/bin/hermes-dispatch-route. The model set comes from the gateway's live /models listing; this file only orders it. rank = general strength (the escalation ladder serves the lowest rank first: cheapest local, then stronger local, then paid cheapest first). paid_ladder = the paid rung families in cheapest-first order, each at its latest id; gpt-6.1-sol and any family outside this list are never rungs (pin only). A flatiron model entry (features[model]) may carry \"ladder\": false and is then never a rung; a missing key means on the ladder. routes = per-kind hint order for sync placement. features[model] = {vision, web, probed}: probed capabilities; probed is the date of the last successful probe. The bare keys haiku/sonnet/opus describe the paid rungs. `pick KIND --needs f1,f2` keeps only models whose features entry has every named feature true (no entry = no capabilities); `pick vision` means `--needs vision`. A missing exact features entry falls back to the family entry; an exact entry, even empty, wins. sync probes features for new healthy listed models and ranks listed unranked models; entries for models the gateway no longer lists are ignored. floors maps kind to anchor model id. A new or returning model enters that kind only when at least as strong as the anchor. A missing floors entry closes code, debug, research or frontend to new models. prose and mechanical have no floor. An anchor out of the rank map closes that kind to new models. tiers[TIER].min_rank (optional) floors the ladder for that tier; a tier without it does not choose the model. features[model].max_effort (optional, one of low, medium, high, xhigh) caps the rung's reasoning effort at min(requested, max_effort); missing means no cap.",
+ "paid_ladder": ["haiku", "sonnet", "opus"],
  "rank": {
   "XiaomiMiMo/MiMo-V2.6-Pro-MOPD": 6,
   "zai-org/GLM-5.3": 5,
@@ -28,7 +29,7 @@
   "sonnet": {"vision": true, "web": true, "probed": "2026-10-16"},
   "opus": {"vision": true, "web": true, "probed": "2026-10-16"},
   "gpt-6.1-sol": {"vision": false, "web": true, "probed": "2026-10-16"},
-  "Qwen/Qwen3.8-27B-FP8": {"vision": true, "web": false, "probed": "2026-10-25"}
+  "Qwen/Qwen3.8-27B-FP8": {"vision": true, "web": false, "probed": "2026-10-25", "max_effort": "medium"}
  },
  "efforts": {
   "_doc": "the reasoning efforts each flatiron model accepts; source: the provider's own error text. A model with no entry takes the tier value unchanged; a rejected value becomes the highest accepted value at or below it; when none is at or below, the lowest accepted value and a warning",
@@ -37,8 +38,8 @@
   "moonshotai/Kimi-K3": ["low", "high", "max"]
  },
  "tiers": {
-  "intern": {"reasoning_effort": "low", "prefer": "cheapest", "skills": [], "fallback": ["haiku", "sonnet"]},
-  "junior": {"reasoning_effort": "high", "prefer": "cheapest", "skills": [], "fallback": ["haiku", "sonnet", "opus"]},
+  "intern": {"reasoning_effort": "low", "skills": [], "fallback": ["haiku", "sonnet"]},
+  "junior": {"reasoning_effort": "high", "skills": [], "fallback": ["haiku", "sonnet", "opus"]},
   "senior": {"reasoning_effort": "high", "skills": ["brainstorm"], "fallback": ["sonnet", "opus"]},
   "principal": {"reasoning_effort": "high", "skills": ["brainstorm", "team", "manager"], "fallback": ["opus"]}
  }
