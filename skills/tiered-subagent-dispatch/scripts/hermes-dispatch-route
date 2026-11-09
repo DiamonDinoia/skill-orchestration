@@ -26,7 +26,11 @@ paid models (Claude, OpenAI) run only through an explicit model pin. `--pin MODE
 (delegate_task calls it `pin_model`): MODEL is the family haiku|sonnet|opus|sol, resolved through
 `latest`, or an exact id. An exact id resolves to its provider against every model the routing
 file knows and every paid-family id, not only the latest per family. An unknown id is an error
-and exits non-zero; a pin never falls through to flatiron. A pinned model obeys --failed and
+and exits non-zero; a pin never falls through to flatiron. A caller id (a pin or a --failed
+entry) must parse as one token of [A-Za-z0-9./_-], no whitespace, no leading '-'; a malformed
+id exits non-zero and returns nothing. The --needs check of a pin reads the exact features
+entry when one exists, even an empty one; the family entry applies only when the exact key is
+absent. A pinned model obeys --failed and
 --needs: an incompatible pin prints the blocked line naming the model and the reason, exits 3,
 and never selects a substitute. pick, lanes and assign return a paid model only for that pin.
 A failed model is never retried and the walk never steps down.
@@ -79,8 +83,19 @@ CLAUDE = "claude-subscription-directsdk-experimental"
 # The paid rung families the routing file describes (bare keys haiku/sonnet/opus plus the sol
 # id), with the id shape of each. A pin resolves its provider from this shape, so every id of a
 # family works, not only the latest one.
-PAID_FAMILIES = {"haiku": r"claude-haiku-\d+.*", "sonnet": r"claude-sonnet-\d+.*",
-                 "opus": r"claude-opus-\d+.*", "sol": r"gpt-\d+.*-sol"}
+PAID_FAMILIES = {"haiku": r"claude-haiku-\d[\w.-]*", "sonnet": r"claude-sonnet-\d[\w.-]*",
+                 "opus": r"claude-opus-\d[\w.-]*", "sol": r"gpt-\d[\w.-]*-sol"}
+# A model id from the caller (--pin, --failed) is one token in the charset real ids use: no
+# whitespace, no leading '-'. Efforts metadata keys like _doc fail the first character.
+_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9./_-]*")
+
+
+def _check_ids(flag, ids):
+    """Reject a malformed caller-supplied model id: exit non-zero, return nothing."""
+    for m in ids:
+        if not _MODEL_ID.fullmatch(m):
+            sys.exit(f"hermes-dispatch-route: invalid model id for {flag} {m!r}: an id is one token of "
+                     "[A-Za-z0-9./_-], no whitespace, no leading '-'")
 # Flatiron hosts drop out and come back: health is re-probed on (nearly) every dispatch.
 # 60 s only dedupes the probes of one dispatch batch.
 FLATIRON_TTL, CLAUDE_TTL, PROBE_TIMEOUT = 60, 6 * 3600, 25
@@ -449,6 +464,7 @@ def _pinned(pin, latest, cfg):
         if not latest.get("sol"):
             sys.exit("hermes-dispatch-route: no live id for family 'sol'; check `hermes auth`")
         return "openai-codex", latest["sol"], fam
+    _check_ids("--pin", [pin])
     for f, prov in (("haiku", CLAUDE), ("sonnet", CLAUDE), ("opus", CLAUDE), ("sol", "openai-codex")):
         if latest.get(f) == pin:
             return prov, pin, f
@@ -491,13 +507,15 @@ def pick(kind, tier, failed, refresh, needs=None, pin=None):
     health = flatiron_status(refresh)
     latest = resolve_latest()
     failed = {m for arg in (failed or []) for m in arg.split(",") if m}  # --failed MODEL ... or MODEL,... list
+    _check_ids("--failed", failed)
     floor = max((cfg["rank"].get(m, 0) for m in failed if m in cfg["rank"]), default=0)
     skipped = []
     skill_flags = "".join(f" -s {s}" for s in tcfg.get("skills", []))
     if pin:  # the caller named the model: the only way pick returns a paid model
         provider, model, fam = _pinned(pin, latest, cfg)
         feats = {**DEFAULT_ROUTING["features"], **(cfg.get("features") or {})}   # the blocked-line map
-        f = feats.get(model) or (feats.get(fam) if fam else None) or {}
+        # An exact entry wins over the family entry even when empty: {} means no features.
+        f = feats[model] if model in feats else ((feats.get(fam) if fam else None) or {})
         lacking = [n for n in needs if not f.get(n)]
         why = ("it is in --failed" if model in failed
                else f"lacks {', '.join(lacking)}" if lacking else None)
@@ -526,6 +544,7 @@ def lanes(kind, tier, failed, needs, pin=None):
     each with the flags its lane job runs. No free fit: an empty list, and the CLI reports
     blocked. Health: cached probe."""
     cfg, tcfg, needs = _pick_setup(kind, tier, needs)
+    _check_ids("--failed", failed)
     health = flatiron_status(False)
     if pin:
         p = pick(kind, tier, failed, False, needs, pin)

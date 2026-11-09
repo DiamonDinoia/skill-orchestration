@@ -1860,6 +1860,44 @@ def check_pin_needs_blocked():
         assert '"model"' not in p.stdout, (cmd, p.stdout)           # never a substitute
 
 
+def check_pin_invalid_id():
+    """P5: a malformed --pin or --failed id is rejected: an id is one token of [A-Za-z0-9./_-],
+    no whitespace, no leading '-'. An argument suffix or an efforts metadata key is never a
+    model id. pick and lanes exit non-zero and return nothing."""
+    bad = ["claude-sonnet-8 --provider flatiron", "-claude-sonnet-8", "gpt-5.5-sol --refresh"]
+    for pin in bad:
+        for sub in ("pick", "lanes"):
+            p = _cli([sub, "code", "--tier", "intern", "--pin", pin])
+            assert p.returncode != 0, (sub, pin, p.returncode, p.stdout)
+            assert not p.stdout.strip(), (sub, pin, p.stdout)
+    table = json.loads(_CLI_TABLE); table["efforts"] = {"_doc": "merger notes, not a model"}
+    p = _cli(["pick", "code", "--tier", "intern", "--pin", "_doc"], routing=json.dumps(table))
+    assert p.returncode != 0, (p.returncode, p.stdout)
+    assert not p.stdout.strip(), p.stdout
+    for sub in ("pick", "lanes"):  # the --failed entries parse the same way
+        p = _cli([sub, "code", "--tier", "intern", "--failed", "claude-sonnet-8 --provider flatiron"])
+        assert p.returncode != 0, (sub, p.returncode, p.stdout)
+        assert not p.stdout.strip(), (sub, p.stdout)
+
+
+def check_pin_empty_exact_features():
+    """P6: an exact features entry wins over the family entry even when it is empty: {} means
+    no features, not "absent". pick and lanes block the pin with exit 3 and no substitute."""
+    table = json.loads(_CLI_TABLE)
+    table["features"] = {"fixture-sonnet": {}, "sonnet": {"vision": True, "web": True}}
+    routing = json.dumps(table)
+    cases = [(["pick", "vision", "--pin", "sonnet"], "vision"),
+             (["lanes", "vision", "--pin", "sonnet"], "vision"),
+             (["pick", "code", "--tier", "intern", "--needs", "web",
+               "--pin", "fixture-sonnet"], "web")]
+    for cmd, feat in cases:
+        p = _cli(cmd, routing=routing)
+        assert p.returncode == 3, (cmd, p.returncode, p.stdout, p.stderr)
+        assert p.stdout.startswith("blocked:") and "fixture-sonnet" in p.stdout, (cmd, p.stdout)
+        assert feat in p.stdout, (cmd, p.stdout)                    # the reason names the missing feature
+        assert '\"model\"' not in p.stdout, (cmd, p.stdout)           # never a substitute
+
+
 if __name__ == "__main__":
     check_route(); check_tiers(); check_effort_clamp(); check_effort_round_down(); check_effort_unknown_names(); check_lanes(); check_needs(); check_default_features()
     check_probe_fallback()
@@ -1879,5 +1917,6 @@ if __name__ == "__main__":
     check_discovery_failure_names_family()
     check_failed_comma_list()
     check_new_skill_layout(); check_routing_file_missing(); check_blocked_no_paid(); check_pin_returns_paid()
-    check_pin_non_latest_paid(); check_pin_unknown_id(); check_pin_failed_blocked(); check_pin_needs_blocked()
+    check_pin_non_latest_paid(); check_pin_unknown_id(); check_pin_invalid_id()
+    check_pin_failed_blocked(); check_pin_needs_blocked(); check_pin_empty_exact_features()
     print("selftest OK")
