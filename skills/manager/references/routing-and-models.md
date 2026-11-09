@@ -32,7 +32,7 @@ A numeric claim that stays identical before and after the reported edit fails ar
 
 ## Dispatch waves
 
-Each dispatch wave names the tier and the quota class of every lane in the report. A move to a paid or subscription model is an escalation. Paid models (Claude, OpenAI) run only through an explicit model pin. On Hermes that is `pin_model`. No implicit paid fallback. When no free model fits, the child or router reports blocked with the available models. The manager decides: another free model, a paid model by pin, or a question to the user. A paid lane states its escalation reason. The report flags every paid landing.
+Each dispatch wave names the tier and the quota class of every lane in the report. Every task starts on the cheapest local (flatiron) model that has its needs. On failure it moves to the next stronger local model, then to paid models cheapest first: haiku, sonnet, opus. The report flags every paid landing. Blocked only when no model fits.
 
 ## UI deliverables
 
