@@ -2,7 +2,7 @@
 name: spec
 description: Use when the user says "write a spec" or "specify", or arrives from brainstorm with a decision log. Turns requests into deliverables with failing checks, iterated until accepted.
 license: MIT
-version: 2.3.1
+version: 2.3.2
 ---
 
 # Spec

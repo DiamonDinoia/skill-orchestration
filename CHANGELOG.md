@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.2
+- Dispatch: the pick follows the global rank map. Every task starts at the cheapest healthy local model with its needs and moves up the map, then to the paid ladder cheapest first. The kind and the tier set the filters and the effort, never the model.
+- Dispatch: `--pin` gives pick, assign and lanes exactly the pinned model; `lanes --pin` adds the rungs above it. A paid discovery failure keeps fitting local rungs usable and drops the paid rungs with one warning.
+- Docs: tests/test_docs.py rejects the three retired routing rules and fails loud when one comes back.
+- Version fields are 2.3.2 in every manifest and skill.
+
 ## 2.3.1
 - Dispatch: `--pin` resolves the provider from the id itself and obeys `--failed` and `--needs`; a malformed caller id exits non-zero, and an empty exact `features` entry wins over the family entry.
 - Version fields are 2.3.1 in every manifest and skill.
