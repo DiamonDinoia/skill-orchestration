@@ -1,7 +1,7 @@
 ---
 name: manager
 description: 'Use when the user says /manager or "act as manager": pin a checkable spec, route every unit to subagents.'
-version: 2.3.0
+version: 2.3.1
 ---
 
 # Manager

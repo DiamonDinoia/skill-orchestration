@@ -1,7 +1,7 @@
 ---
 name: tiered-subagent-dispatch
 description: "Use when dispatching tiered subagents in Hermes: flatiron-first ladder, tier picks, blind review, dispatch scripts."
-version: 2.3.0
+version: 2.3.1
 ---
 
 # Tiered subagent dispatch (Hermes binding)

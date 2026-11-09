@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.1
+- Dispatch: `--pin` resolves the provider from the id itself and obeys `--failed` and `--needs`; a malformed caller id exits non-zero, and an empty exact `features` entry wins over the family entry.
+- Version fields are 2.3.1 in every manifest and skill.
+
 ## 2.3.0
 - Dispatch: per-task routing fields (`pin_model`, `needs`) and multi-model recon in the manager brief.
 - Manager: Sol is the permanent final reviewer; the tier-review ladder is dropped and a waiter-turn rule takes its place.

@@ -65,7 +65,7 @@ the name check. It also runs `skills/parallel/scripts/waves.py --selftest` from 
 test/run.sh   # podman, or: test/run.sh docker
 ```
 
-## Version 2.3.0
+## Version 2.3.1
 
 The manager runs no commands itself; every command routes to a child and waits go to the intern
 tier. Small models serve the junior and intern tiers by default: the intern tier takes the
