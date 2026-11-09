@@ -1496,7 +1496,7 @@ _CLI_TABLE = json.dumps({
     "features": {}})
 
 
-def _cli(args, routing=_CLI_TABLE, models=None, ledger=b""):
+def _cli(args, routing=_CLI_TABLE, models=None, ledger=b"", latest=None):
     """Run the router CLI offline: the scratch HERMES_HOME cache is fresh, so no probe and no
     model discovery reach the network. Returns the CompletedProcess for the caller to assert on."""
     with tempfile.TemporaryDirectory() as d:
@@ -1504,8 +1504,8 @@ def _cli(args, routing=_CLI_TABLE, models=None, ledger=b""):
         (home / "cache").mkdir()
         (home / "cache" / "dispatch-route.json").write_text(json.dumps(
             {"flatiron": {"at": time.time(), "models": models or {}, "listed": []},
-             "latest": {"at": time.time(), "opus": "fixture-opus", "sonnet": "fixture-sonnet",
-                        "haiku": "fixture-haiku", "sol": "x"}}))
+             "latest": latest or {"at": time.time(), "opus": "fixture-opus", "sonnet": "fixture-sonnet",
+                                  "haiku": "fixture-haiku", "sol": "x"}}))
         rfile, led = home / "routing.json", home / "outcomes.jsonl"
         rfile.write_text(routing)
         led.write_bytes(ledger)
@@ -1807,6 +1807,98 @@ def check_pin_empty_exact_features():
         assert '\"model\"' not in p.stdout, (cmd, p.stdout)           # never a substitute
 
 
+_LADDER_FIX_TABLE = json.dumps({
+    "rank": {MIST: 1, QWEN: 3, KIMI: 4},
+    "routes": {"code": [KIMI, QWEN, MIST]},
+    "paid_ladder": ["haiku", "sonnet", "opus"],
+    "tiers": {"intern": {"reasoning_effort": "low"}, "senior": {"reasoning_effort": "high"}},
+    "features": {QWEN: {"vision": True, "web": False},
+                 "haiku": {"vision": True, "web": True},
+                 "sonnet": {"vision": True, "web": True},
+                 "opus": {"vision": True, "web": True}},
+    "efforts": {MIST: ["none", "high"], QWEN: ["xhigh", "medium", "low"]}})
+# The id shape the account picker emits, bracket suffix and all.
+HAIKU_B, SONNET_B, OPUS_B = "claude-haiku-5-5[1m]", "claude-sonnet-5-5[1m]", "claude-opus-5-5[1m]"
+_LATEST_B = {"at": time.time(), "haiku": HAIKU_B, "sonnet": SONNET_B, "opus": OPUS_B, "sol": "gpt-6.1-sol"}
+_HEALTH_B = {m: {"ok": True} for m in (MIST, QWEN, KIMI)}
+
+
+def check_emitted_ids_pass_failed_validation():
+    """S5: every id pick and lanes emit passes --failed validation. Bracketed discovered ids
+    pass, and the documented escalation runs on them. Whitespace, a leading '-' and an
+    argument suffix are rejected."""
+    for tier in ("intern", "senior"):
+        for needs in ("", "vision", "web"):
+            args = ["--tier", tier] + (["--needs", needs] if needs else [])
+            for cmd in ("pick", "lanes"):
+                p = _cli([cmd, "code", *args], routing=_LADDER_FIX_TABLE, models=_HEALTH_B, latest=_LATEST_B)
+                assert p.returncode in (0, 3), (cmd, tier, needs, p.stderr)
+                out = json.loads(p.stdout)
+                for e in (out if isinstance(out, list) else [out]):
+                    if e.get("model"):
+                        _emitted_ids_seen.add(e["model"])
+    assert any(m.endswith("[1m]") for m in _emitted_ids_seen), _emitted_ids_seen
+    for m in sorted(_emitted_ids_seen):
+        p = _cli(["pick", "code", "--tier", "intern", "--failed", m],
+                 routing=_LADDER_FIX_TABLE, models=_HEALTH_B, latest=_LATEST_B)
+        assert "invalid model id" not in p.stderr, (m, p.stderr)
+        assert p.returncode in (0, 3), (m, p.returncode, p.stderr)
+    p = _cli(["pick", "code", "--tier", "intern", "--needs", "vision", "--failed", QWEN, HAIKU_B],
+             routing=_LADDER_FIX_TABLE, models=_HEALTH_B, latest=_LATEST_B)
+    assert p.returncode == 0 and json.loads(p.stdout)["model"] == SONNET_B, p.stdout
+    for bad in ("x y", "x;y", "x$y", f"{HAIKU_B}extra", f"{HAIKU_B} --reasoning high"):
+        p = _cli(["pick", "code", "--tier", "intern", "--failed", bad],
+                 routing=_LADDER_FIX_TABLE, models=_HEALTH_B, latest=_LATEST_B)
+        assert p.returncode == 1 and "invalid model id" in p.stderr, (bad, p.returncode, p.stderr)
+    p = _cli(["pick", "code", "--tier", "intern", "--failed", "-x"],
+             routing=_LADDER_FIX_TABLE, models=_HEALTH_B, latest=_LATEST_B)
+    assert p.returncode != 0, (p.returncode, p.stderr)
+    p = _cli(["pick", "code", "--tier", "intern", "--failed=-x"],
+             routing=_LADDER_FIX_TABLE, models=_HEALTH_B, latest=_LATEST_B)
+    assert p.returncode == 1 and "invalid model id" in p.stderr, (p.returncode, p.stderr)
+
+
+_emitted_ids_seen = set()
+
+
+def check_paid_discovery_failure_keeps_local_rungs():
+    """S6: a paid discovery failure keeps healthy local rungs. ladder, lanes and assign serve
+    the local models, and the paid rungs drop with one stderr warning."""
+    r = load("hermes-dispatch-route")
+    r.routing = lambda: json.loads(_LADDER_FIX_TABLE)
+    r.flatiron_status = lambda *a: _HEALTH_B
+    r.inflight_counts = lambda: {}
+
+    def boom(*a, **k):
+        raise SystemExit("hermes-dispatch-route: could not discover latest opus, sonnet "
+                         "(claude: failed; check `claude` is on PATH)")
+    r.resolve_latest = boom
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        rungs = r.ladder([])
+        lanes = r.lanes("code", "intern", [], [])
+        nodes = r.assign([("n1", "code", "intern", []), ("n2", "code", "intern", [])])
+    assert [x[1] for x in rungs] == [MIST, QWEN, KIMI], rungs
+    assert [x["model"] for x in lanes] == [MIST, QWEN, KIMI], lanes
+    assert {x["model"] for x in nodes} == {MIST, QWEN}, nodes
+    assert "paid rungs dropped" in buf.getvalue(), buf.getvalue()
+
+
+def check_pin_contract_pick_assign_lanes():
+    """S7: pick --pin and assign --pin print exactly the pinned model, and nothing else.
+    lanes --pin prints it, then the rungs above it."""
+    p = _cli(["pick", "code", "--tier", "intern", "--pin", QWEN],
+             routing=_LADDER_FIX_TABLE, models=_HEALTH_B, latest=_LATEST_B)
+    assert p.returncode == 0 and json.loads(p.stdout)["model"] == QWEN, p.stdout
+    p = _cli(["assign", "n1=code:intern", "n2=code:senior", "--pin", QWEN],
+             routing=_LADDER_FIX_TABLE, models=_HEALTH_B, latest=_LATEST_B)
+    assert p.returncode == 0, (p.returncode, p.stdout, p.stderr)
+    assert [e["model"] for e in json.loads(p.stdout)] == [QWEN, QWEN], p.stdout
+    p = _cli(["lanes", "code", "--tier", "intern", "--pin", QWEN],
+             routing=_LADDER_FIX_TABLE, models=_HEALTH_B, latest=_LATEST_B)
+    assert [e["model"] for e in json.loads(p.stdout)] == [QWEN, KIMI, HAIKU_B, SONNET_B, OPUS_B], p.stdout
+
+
 if __name__ == "__main__":
     check_route(); check_tiers(); check_effort_clamp(); check_effort_round_down(); check_effort_unknown_names(); check_lanes(); check_needs(); check_default_features()
     check_probe_fallback()
@@ -1827,4 +1919,6 @@ if __name__ == "__main__":
     check_new_skill_layout(); check_routing_file_missing(); check_blocked_no_paid(); check_pin_returns_paid()
     check_pin_non_latest_paid(); check_pin_unknown_id(); check_pin_invalid_id()
     check_pin_failed_blocked(); check_pin_needs_blocked(); check_pin_empty_exact_features()
+    check_emitted_ids_pass_failed_validation(); check_paid_discovery_failure_keeps_local_rungs()
+    check_pin_contract_pick_assign_lanes()
     print("selftest OK")

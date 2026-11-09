@@ -7,10 +7,11 @@
   hermes-dispatch-route lanes KIND [--tier T] [--needs F[,F...]] [--failed M[,...]] [--pin MODEL]
                                                      -> JSON line: every ladder rung for the request;
                                                         no rung prints one "blocked:" line, exit 3
-  hermes-dispatch-route assign NODE=KIND:TIER[:NEED,NEED] ...
+  hermes-dispatch-route assign NODE=KIND:TIER[:NEED,NEED] ... [--pin MODEL]
                                                      -> JSON list, one entry per node: the ladder
                                                         rung with the fewest in-flight jobs
-                                                        (ties in ladder order), so one batch spreads out
+                                                        (ties in ladder order), so one batch spreads out;
+                                                        with --pin MODEL every node takes exactly MODEL
   hermes-dispatch-route latest opus|sonnet|sol|haiku -> bare model id
   hermes-dispatch-route models [--refresh]           every gateway model: health, rank hint, kinds, new
   hermes-dispatch-route sync [--refresh]             write discovered ids into Hermes config
@@ -23,7 +24,8 @@ when ROUTING_FILE defines one for that tier: tiers[TIER].min_rank)
 Escalation ladder (user's standing order 2026-11-08): the cheapest local model first, then stronger local
 models, then the paid models cheapest first. pick, lanes and assign return the rungs of `ladder(needs,
 failed)` in that order: the on-ladder healthy flatiron models whose features cover every need, ascending
-RANK (lowest first), then the paid_ladder families of ROUTING_FILE in list order at their latest ids.
+RANK (lowest first; a model outside the rank map is excluded until sync ranks it), then the paid_ladder
+families of ROUTING_FILE in list order at their latest ids.
 A flatiron model entry (features[model]) may carry "ladder": false and is then never a rung; a missing key
 means on the ladder. gpt-6.1-sol and any family outside paid_ladder are never rungs. Failed ids and
 unhealthy flatiron models are skipped. A ledger demotion (3 failed runs of this KIND) drops a rung, and
@@ -33,19 +35,23 @@ Pin rules (unchanged): `--pin MODEL` is the explicit pin (delegate_task calls it
 family haiku|sonnet|opus|sol, resolved through `latest`, or an exact id. An exact id resolves to its
 provider against every model the routing file knows and every paid-family id, not only the latest per
 family. An unknown id is an error and exits non-zero; a pin never falls through to flatiron. A caller id
-(a pin or a --failed entry) must parse as one token of [A-Za-z0-9./_-], no whitespace, no leading '-'; a
-malformed id exits non-zero and returns nothing. The --needs check of a pin reads the exact features
-entry when one exists, even an empty one; the family entry applies only when the exact key is absent.
-A pinned model obeys --failed and --needs: an incompatible pin prints the blocked line naming the model
-and the reason, exits 3, and never selects a substitute. `--pin MODEL` returns MODEL; `lanes --pin MODEL`
-then continues up the ladder from MODEL's position (the rungs above it). A failed model is never retried.
+(a pin or a --failed entry) must parse as one token of [A-Za-z0-9./_-] with at most one [..] suffix
+(claude-haiku-5-5[1m] passes), no whitespace, no leading '-'; a malformed id exits non-zero and returns
+nothing. The --needs check of a pin reads the exact features entry when one exists, even an empty one;
+the family entry applies only when the exact key is absent. A pinned model obeys --failed and --needs: an
+incompatible pin prints the blocked line naming the model and the reason, exits 3, and never selects a
+substitute. `--pin MODEL` returns MODEL and nothing else; `assign --pin MODEL` gives every node exactly
+MODEL; `lanes --pin MODEL` returns MODEL, then the rungs above MODEL's ladder position. The
+delegation-tiers plugin's pin_model chain is that same lanes list after MODEL. A failed model is never
+retried.
 Capabilities / model are in the ROUTING_FILE "features" map: features[model] = {vision, web, probed};
 --needs F requires every named feature true (a model with no entry has no features; `pick vision`
 means `--needs vision`). The blocked line reads features[haiku|sonnet|opus] through the same filter
 (built-in defaults when the json lacks the key).
 Flags: --reasoning EFFORT only on a flatiron pick, clamped to the efforts the model accepts (efforts map
 in ROUTING_FILE) and to the entry's max_effort: min(requested, max_effort); -s SKILL per tier skill on
-every pick. The ladder rungs expose max_effort for the plugin through `ladder()`.
+every pick. The delegation-tiers plugin imports `ladder()` and `effective_effort()` from this script, so
+its primary effort and its chain cannot drift from pick's.
 Ranks, per-kind hints, paid_ladder and tiers live in ROUTING_FILE (JSON) so they can be tuned without
 editing code.
 ROUTING_FILE resolves over HERMES_DISPATCH_ROUTING_FILE, the references/ dir beside this script's
@@ -90,20 +96,25 @@ BASE = "https://inference.flatironinstitute.org/v1"
 CLAUDE = "claude-subscription-directsdk-experimental"
 # The paid rung families the routing file describes (bare keys haiku/sonnet/opus plus the sol
 # id), with the id shape of each. A pin resolves its provider from this shape, so every id of a
-# family works, not only the latest one.
-PAID_FAMILIES = {"haiku": r"claude-haiku-\d[\w.-]*", "sonnet": r"claude-sonnet-\d[\w.-]*",
-                 "opus": r"claude-opus-\d[\w.-]*", "sol": r"gpt-\d[\w.-]*-sol"}
+# family works, not only the latest one. The optional [..] suffix matches the account picker's
+# bracketed context ids (claude-haiku-5-5[1m]) unchanged.
+PAID_FAMILIES = {"haiku": r"claude-haiku-\d[\w.-]*(?:\[[\w.-]+\])?",
+                 "sonnet": r"claude-sonnet-\d[\w.-]*(?:\[[\w.-]+\])?",
+                 "opus": r"claude-opus-\d[\w.-]*(?:\[[\w.-]+\])?",
+                 "sol": r"gpt-\d[\w.-]*-sol(?:\[[\w.-]+\])?"}
 # A model id from the caller (--pin, --failed) is one token in the charset real ids use: no
-# whitespace, no leading '-'. Efforts metadata keys like _doc fail the first character.
-_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9./_-]*")
+# whitespace, no leading '-', and at most one bracket suffix at the end. Efforts metadata keys
+# like _doc fail the first character; smuggled flags and trailing junk fail the tail.
+_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9./_-]*(?:\[[A-Za-z0-9._-]+\])?")
 
 
 def _check_ids(flag, ids):
-    """Reject a malformed caller-supplied model id: exit non-zero, return nothing."""
+    """Reject a malformed caller-supplied model id: exit non-zero, return nothing. Every id the
+    router itself emits passes, bracket suffix included."""
     for m in ids:
         if not _MODEL_ID.fullmatch(m):
             sys.exit(f"hermes-dispatch-route: invalid model id for {flag} {m!r}: an id is one token of "
-                     "[A-Za-z0-9./_-], no whitespace, no leading '-'")
+                     "[A-Za-z0-9./_-] with at most one [..] suffix, no whitespace, no leading '-'")
 # Flatiron hosts drop out and come back: health is re-probed on (nearly) every dispatch.
 # 60 s only dedupes the probes of one dispatch batch.
 FLATIRON_TTL, CLAUDE_TTL, PROBE_TIMEOUT = 60, 6 * 3600, 25
@@ -278,7 +289,7 @@ def resolve_latest(refresh=False):
          "sonnet": best(found.get("claude", []), r"claude-sonnet-\d+(-\d+)?(-\d{8})?") or prev.get("sonnet"),
          "haiku": best(found.get("claude", []), r"claude-haiku-\d+(-\d+)?(-\d{8})?") or prev.get("haiku"),
          "sol": best(found.get("codex", []), r"gpt-\d+(\.\d+)?-sol") or prev.get("sol")}
-    missing = [k for k in ("opus", "sonnet", "sol") if not r[k]]  # haiku is checked where used (claude_id)
+    missing = [k for k in ("opus", "sonnet") if not r[k]]  # sol is pin-only, never a rung; haiku is checked where used (claude_id)
     if missing:
         def fam_status(fam, hint):
             # an empty list means discovery found nothing; never report that family as ok
@@ -292,6 +303,22 @@ def resolve_latest(refresh=False):
                  "check `claude` login")
     save_section("latest", r)
     return r
+
+
+_DISCOVERY_WARNED = set()
+
+
+def _latest_soft():
+    """resolve_latest that never dies: a routing path must not block on paid discovery. The paid
+    rungs drop and the failure prints to stderr once per process (the only place that says so)."""
+    global _DISCOVERY_WARNED
+    try:
+        return resolve_latest()
+    except SystemExit as e:
+        if not _DISCOVERY_WARNED:
+            _DISCOVERY_WARNED.add(str(e))
+            print(f"warning: {e}; paid rungs dropped", file=sys.stderr)
+        return {}
 
 
 def claude_id(latest, fam):
@@ -357,9 +384,17 @@ def _effort(m, effort, cfg):
     return lowest
 
 
+def effective_effort(model, requested):
+    """The effort one rung of model runs at. The rule in one line: min(requested, the features
+    entry's max_effort), then the nearest value the model's efforts map accepts at or below that
+    cap, else the lowest accepted value (Mistral takes none and high, so a requested low gives
+    none). The delegation-tiers plugin imports this and cannot drift from pick's --reasoning."""
+    return _effort(model, requested, routing())
+
+
 def _flatiron_flags(m, tcfg, cfg):
     """The flags pick emits for flatiron model m: the clamped reasoning effort and skills."""
-    return (f"--provider flatiron -m {m} --reasoning {_effort(m, tcfg['reasoning_effort'], cfg)}"
+    return (f"--provider flatiron -m {m} --reasoning {effective_effort(m, tcfg['reasoning_effort'])}"
             + "".join(f" -s {s}" for s in tcfg.get("skills", [])))
 
 
@@ -412,14 +447,18 @@ def _entry_for(feats, model, fam=None):
 
 
 def ladder(needs=None, failed=()):
-    """The escalation rungs for these needs, cheapest fitting first; one (provider, model, max_effort)
-    per rung, and the entry the delegation-tiers plugin imports. Order: on-ladder healthy flatiron
-    models whose features cover every need, ascending rank, then the paid_ladder families in list
-    order at their latest ids. Failed ids and unhealthy flatiron models are skipped. A features
-    entry may carry "ladder": false and its model is then never a rung; a missing key means on the
-    ladder. A missing exact features entry falls back to the family entry; an exact entry, even
-    empty, wins. max_effort is the entry's effort cap (None = no cap). gpt-6.1-sol and any family
-    outside paid_ladder are never rungs."""
+    """The escalation rungs for these needs, cheapest fitting first; one (provider, model, top
+    effort) per rung, and the entry the delegation-tiers plugin imports alongside
+    effective_effort(). Order: on-ladder healthy flatiron models whose features cover every need,
+    ascending rank, then the paid_ladder families in list order at their latest ids. A model
+    outside the rank map is excluded (never a rung until sync ranks it). Failed ids and unhealthy
+    flatiron models are skipped. A features entry may carry "ladder": false and its model is then
+    never a rung; a missing key means on the ladder. A missing exact features entry falls back to
+    the family entry; an exact entry, even empty, wins. The top effort is the entry's max_effort
+    run through effective_effort(model, cap): the highest effort the rung can ever run at, snapped
+    to what its efforts map accepts (None = no cap). gpt-6.1-sol and any family outside
+    paid_ladder are never rungs. A failed paid discovery drops the paid rungs; it never blocks
+    these local ones."""
     cfg = routing()
     needs = set(needs or ())
     failed = {m for a in (failed or ()) for m in (a.split(",") if isinstance(a, str) else [a]) if m}
@@ -431,17 +470,24 @@ def ladder(needs=None, failed=()):
         return all(f.get(n) for n in needs)
 
     rank = cfg["rank"]
-    out = [("flatiron", m, _entry_for(feats, m).get("max_effort"))
+
+    def top(model, fam=None):
+        # the rung's top effort: the entry's max_effort through effective_effort, so the cap is
+        # always a value the model accepts (None = no cap)
+        cap = _entry_for(feats, model, fam).get("max_effort")
+        return effective_effort(model, cap) if cap else None
+
+    out = [("flatiron", m, top(m))
            for m in sorted(rank, key=lambda m: rank[m])
            if _entry_for(feats, m).get("ladder") is not False and m not in failed
            and health.get(m, {}).get("ok") and fits(m)]
-    latest = resolve_latest()
+    latest = _latest_soft()
     for fam in (cfg.get("paid_ladder", DEFAULT_ROUTING["paid_ladder"])):
         mid = latest.get(fam)
         if fam == "sol" or not mid or mid in failed:   # sol is the reviewer: never a rung
             continue
         if fits(mid, fam):
-            out.append((CLAUDE, mid, _entry_for(feats, mid, fam).get("max_effort")))
+            out.append((CLAUDE, mid, top(mid, fam)))
     return out
 
 
@@ -489,7 +535,7 @@ def _ladder_key(cfg, provider, model):
         return (0, cfg["rank"].get(model, 0))
     fams = list(cfg.get("paid_ladder", DEFAULT_ROUTING["paid_ladder"]))
     fam = (_paid_family(model)
-           or next((f for f, mid in resolve_latest().items() if mid == model), ""))
+           or next((f for f, mid in _latest_soft().items() if mid == model), ""))
     return (1, fams.index(fam) if fam in fams else len(fams))
 
 
@@ -562,7 +608,7 @@ def pick(kind, tier, failed, refresh, needs=None, pin=None):
     _check_ids("--failed", failed)
     skipped = []
     if pin:  # the caller named the model: the only way pick names a model outside the ladder
-        provider, model, fam = _pinned(pin, resolve_latest(), cfg)
+        provider, model, fam = _pinned(pin, _latest_soft(), cfg)
         feats = _features_view(cfg)
         # An exact entry wins over the family entry even when empty: {} means no features.
         f = _entry_for(feats, model, fam)
@@ -584,7 +630,7 @@ def pick(kind, tier, failed, refresh, needs=None, pin=None):
                 "skipped": skipped}
     # The ladder is empty for these needs: blocked, never a substitute rung.
     return {"provider": None, "model": None, "flags": None,
-            "reason": blocked_line(kind, tier, failed, needs, cfg, flatiron_status(False), resolve_latest()),
+            "reason": blocked_line(kind, tier, failed, needs, cfg, flatiron_status(False), _latest_soft()),
             "skipped": skipped}
 
 
@@ -706,17 +752,30 @@ def inflight_counts():
     return counts
 
 
-def assign(specs):
+def assign(specs, pin=None):
     """Load-balanced batch pick: every node takes its eligible ladder rung with the fewest in-flight
     jobs (ties in ladder order, quota-free flatiron rungs before paid ones) and raises that model's
     running count before the next node, so one batch spreads over the local rungs. No model cap: a
-    rung serves every node that fits its eligibility. A node with no rung gets the blocked line and
-    no model."""
+    rung serves every node that fits its eligibility. `--pin MODEL` gives every node exactly MODEL,
+    under pick's pin rules per node. A node with no rung gets the blocked line and no model."""
     counts = inflight_counts()
     out = []
     for node, kind, tier, needs in specs:
         cfg, tcfg, needs = _pick_setup(kind, tier, needs)
         sk = []
+        if pin:  # the pin names the model: every node takes exactly that model, never another rung
+            p = pick(kind, tier, [], False, needs, pin)
+            if p["model"] is None:
+                out.append({"node": node, "kind": kind, "tier": tier, "provider": None,
+                            "model": None, "flags": None, "load": 0,
+                            "reason": p["reason"], "fallback": True})
+                continue
+            load = counts.get(p["model"], 0)
+            counts[p["model"]] = load + 1
+            out.append({"node": node, "kind": kind, "tier": tier, "provider": p["provider"],
+                        "model": p["model"], "flags": p["flags"], "load": load,
+                        "reason": f"explicit pin {pin}", "fallback": False})
+            continue
         el = _rungs(kind, tier, needs, [], sk)
         if el:
             provider, m, _cap = min(el, key=lambda r: (r[0] != "flatiron", counts.get(r[1], 0)))
@@ -1316,6 +1375,7 @@ def main():
     ln.add_argument("--needs", default="", help="comma list of required features, e.g. vision,web")
     ln.add_argument("--pin", default=None, help="the caller's explicit model pin (pin_model): an exact id or haiku|sonnet|opus|sol")
     g = sub.add_parser("assign"); g.add_argument("nodes", nargs="+", metavar="NODE=KIND:TIER[:NEED,NEED]")
+    g.add_argument("--pin", default=None, help="the caller's explicit model pin (pin_model): an exact id or haiku|sonnet|opus|sol; every node takes exactly it")
     l = sub.add_parser("latest"); l.add_argument("family", choices=["opus", "sonnet", "sol", "haiku"])
     l.add_argument("--refresh", action="store_true")
     y = sub.add_parser("sync"); y.add_argument("--refresh", action="store_true")
@@ -1351,7 +1411,7 @@ def main():
                 sys.exit(f"assign: bad node spec {spec!r}; want NODE=KIND:TIER[:NEED,NEED]")
             needs = [n.strip() for n in parts[2].split(",") if n.strip()] if len(parts) == 3 else []
             specs.append((node, parts[0], parts[1], needs))
-        out = assign(specs)
+        out = assign(specs, a.pin)
         blocked = [e for e in out if not e["model"]]
         if blocked:
             for e in blocked:
