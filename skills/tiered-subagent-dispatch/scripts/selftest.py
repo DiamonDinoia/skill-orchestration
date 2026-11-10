@@ -53,16 +53,20 @@ def check_route():
 
 def check_tiers():
     """The tier floors the ladder: the tier_floor model of a tier is its first rung and paid_floor
-    starts its paid rungs. A missing or unknown tier takes the intern floor. Need-wins: a need the
-    floor models lack starts at the strongest fitting local model below the floor. A failed floor
-    model gives the paid floor next. A ladder-false model is never a rung and stays pinnable."""
+    starts its paid rungs. A missing or unknown tier takes the intern floor. A null tier floor
+    (super) has no local rung. Need-wins: a need the floor models lack starts at the strongest
+    fitting local model below the floor. A failed floor model opens the same exception. A
+    ladder-false model is never a rung and stays pinnable."""
     r = load("hermes-dispatch-route")
     r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9", "haiku": "claude-haiku-9", "sol": "x"}
     cfg = json.loads(r.ROUTING_FILE.read_text())  # the real tier table, so a bad edit to it fails here
     tf = cfg["tier_floor"]                        # the real floor ids, tested here verbatim
     QWEN, GLM, MIMO, KIMI = "Qwen/Qwen3.8-27B-FP8", "zai-org/GLM-5.3", "XiaomiMiMo/MiMo-V2.6-Pro-MOPD", "moonshotai/Kimi-K3"
-    assert tf == {"intern": QWEN, "junior": GLM, "senior": MIMO, "principal": KIMI}, tf
-    assert cfg["paid_floor"] == {"intern": "haiku", "junior": "haiku", "senior": "sonnet", "principal": "opus"}, cfg["paid_floor"]
+    assert tf == {"intern": QWEN, "junior": QWEN, "senior": MIMO, "principal": MIMO, "super": None}, tf
+    assert cfg["paid_floor"] == {"intern": "haiku", "junior": "haiku", "senior": "sonnet",
+                                 "principal": "opus", "super": "opus"}, cfg["paid_floor"]
+    assert cfg["tiers"]["super"] == {"reasoning_effort": "high", "skills": ["brainstorm", "agent-comms"],
+                                     "fallback": ["opus"]}, cfg["tiers"]["super"]
     MIST = "mistralai/Mistral-Medium-3.5-128B"
     cfg["rank"] = {QWEN: 3, GLM: 4, MIMO: 5, KIMI: 6, MIST: 1}   # the shipped scale: qwen weakest
     cfg["routes"] = {"code": [QWEN, GLM, MIMO, KIMI]}
@@ -81,19 +85,22 @@ def check_tiers():
     assert lanes("intern") == [QWEN, GLM, MIMO, KIMI] + paid, lanes("intern")            # floor = weakest local
     assert names(None) == names("intern"), "a missing tier takes the intern floor"
     assert names("lead") == names("intern"), "an unknown tier takes the intern floor"
-    assert lanes("junior") == [GLM, MIMO, KIMI] + paid, lanes("junior")                  # junior starts at GLM
+    assert lanes("junior") == [QWEN, GLM, MIMO, KIMI] + paid, lanes("junior")            # junior floor is qwen
     assert lanes("senior") == [MIMO, KIMI] + paid[1:], lanes("senior")                   # senior starts at MiMo
-    assert lanes("principal") == [KIMI] + paid[2:], lanes("principal")                   # principal starts at Kimi
+    assert lanes("principal") == [MIMO, KIMI] + paid[2:], lanes("principal")             # principal starts at MiMo
+    assert lanes("super") == paid[2:], lanes("super")                                    # a null floor: paid only
     assert MIST not in str(lanes("intern")) + str(lanes("principal")), "ladder false is never a rung"
     assert lanes("senior", needs=["vision"]) == [QWEN] + paid[1:], "need-wins drops below the floor"
-    assert lanes("senior", failed=[MIMO, KIMI]) == paid[1:], "a failed floor gives the paid floor next"
-    assert lanes("principal", failed=[KIMI]) == paid[2:], "principal paid floor is opus"
+    assert lanes("senior", failed=[MIMO, KIMI]) == [GLM] + paid[1:], "a failed floor opens the exception"
+    assert lanes("principal", failed=[KIMI]) == [MIMO] + paid[2:], "principal paid floor is opus"
     assert lanes("intern", failed=[QWEN, GLM, MIMO, KIMI]) == paid, "every local failed -> intern paid floor"
     assert pick(tier="principal", pin=MIST)["model"] == MIST, "a ladder-false model stays pinnable"
     f = pick(tier="principal")["flags"]                                                   # flatiron pick: effort and skills
     assert "--reasoning high" in f and "-s brainstorm -s team -s manager" in f, f
     f = pick(tier="intern")["flags"]
     assert "-s " not in f and "--reasoning low" in f, f
+    f = pick(tier="super")["flags"]                                                       # super: opus team, no effort
+    assert "--reasoning" not in f and "-s brainstorm -s agent-comms" in f, f
     health(**{QWEN: False, GLM: False, MIMO: False, KIMI: False, MIST: False})    # all flatiron down
     assert lanes("intern") == paid and lanes("senior") == paid[1:] and lanes("principal") == paid[2:]
     f = pick(tier="principal", pin="opus")["flags"]                                       # explicit pin: skills, no effort
@@ -722,6 +729,13 @@ def check_tier_min_rank():
     assert [x["model"] for x in r.lanes("code", "intern", [], [])] == ["c/Weak", "b/Mid", "a/Strong"]  # no key: whole ladder
     cfg["tiers"]["senior"]["min_rank"] = "four"                                       # a bad value is ignored
     assert [x["model"] for x in r.lanes("code", "senior", [], [])] == ["c/Weak", "b/Mid", "a/Strong"]
+    # the v2.3.3 Sol case: a fixture with only the legacy intern min_rank routes an untiered and
+    # an unknown tier to that min_rank start
+    cfg["tiers"] = {"intern": {"reasoning_effort": "low", "min_rank": 3}}
+    for tier in (None, "ghost"):
+        assert [m for _p, m, _t in r.ladder([], [], tier)] == ["b/Mid", "a/Strong"], tier
+    assert [x["model"] for x in r.lanes("code", "intern", [], [])] == ["b/Mid", "a/Strong"]
+    assert r.pick("code", "intern", [], False)["model"] == "b/Mid"
 
 
 def check_max_effort():
@@ -1253,7 +1267,7 @@ def check_sync_fallback_chain():
     assert store["delegation.model"] == "c/Cheap", store                  # the head: cheapest healthy rung
     assert store["delegation.fallback_providers"] == chain, store["delegation.fallback_providers"]
     fb = {t: v["fallback"] for t, v in store["delegation.tiers"].items()}
-    assert fb == {t: chain for t in ("intern", "junior", "senior", "principal")}, fb   # every tier: the same chain
+    assert fb == {t: chain for t in ("intern", "junior", "senior", "principal", "super")}, fb   # every tier: the same chain
     assert "sol" not in json.dumps([chain] + list(fb.values())).lower(), fb            # the reviewer is no rung
 
 
@@ -1272,7 +1286,7 @@ def check_sync_fallback_single_model():
     assert store["delegation.model"] == "a/Only", store
     assert store["delegation.fallback_providers"] == chain, store["delegation.fallback_providers"]
     assert {t: v["fallback"] for t, v in store["delegation.tiers"].items()} == \
-           {t: chain for t in ("intern", "junior", "senior", "principal")}, store["delegation.tiers"]
+           {t: chain for t in ("intern", "junior", "senior", "principal", "super")}, store["delegation.tiers"]
     with contextlib.redirect_stdout(buf := io.StringIO()):
         assert r.sync(False) == 0
     assert "config already current" in buf.getvalue(), buf.getvalue()
@@ -1401,15 +1415,16 @@ def _ledger_row(i, model, verdict, kind="mechanical"):
 
 
 def check_ledger_demotes():
-    """Three failed rows for a kind demote the model: the next ladder rung takes the pick."""
+    """Three counted rows for a kind demote the model: the next ladder rung takes the pick.
+    A row counts only when its verdict string is exactly 'failed'."""
     r, qwen, mist, kimi = _ledger_case()
     with tempfile.TemporaryDirectory() as d:
         led = Path(d, "outcomes.jsonl")
         os.environ["HERMES_DISPATCH_LEDGER"] = str(Path(d, "missing.jsonl"))   # a missing file is an empty ledger
         assert r.pick("mechanical", "senior", [], False)["model"] == kimi       # the ladder head: kimi first
         os.environ["HERMES_DISPATCH_LEDGER"] = str(led)
-        rows = [_ledger_row(i, "MOONSHOTAI/KIMI-K3", v)                        # upper-case id pins the lowercase match
-                for i, v in enumerate(("failed-garbled-report", "hung", "fabricated-report"))]
+        rows = [_ledger_row(i, "MOONSHOTAI/KIMI-K3", "failed")                 # upper-case id pins the lowercase match
+                for i in range(3)]
         led.write_text("".join(json.dumps(x) + "\n" for x in rows))
         p = r.pick("mechanical", "senior", [], False)
         assert p["model"] == mist, p
@@ -1419,13 +1434,33 @@ def check_ledger_demotes():
     os.environ["HERMES_DISPATCH_LEDGER"] = NO_LEDGER
 
 
-def check_ledger_mixed_verdicts():
-    """Two failures plus one clean run in the last 3 rows do not demote."""
+def check_ledger_verdict():
+    """D3: only the exact verdict 'failed' counts toward the 3-strike drop. missed-defects,
+    blocked, interrupted, hung and fabricated never count, hyphenated forms included."""
     r, qwen, mist, kimi = _ledger_case()
     with tempfile.TemporaryDirectory() as d:
         led = Path(d, "outcomes.jsonl")
         os.environ["HERMES_DISPATCH_LEDGER"] = str(led)
-        rows = [_ledger_row(i, kimi, v) for i, v in enumerate(("failed-interrupted", "hung", "done-clean"))]
+        for v in ("failed-garbled-report", "hung", "fabricated-report", "missed-defects",
+                  "blocked", "interrupted", "failed-check", "FAILED"):
+            rows = [_ledger_row(i, kimi, v) for i in range(3)]                 # three rows, none exact 'failed'
+            led.write_text("".join(json.dumps(x) + "\n" for x in rows))
+            p = r.pick("mechanical", "senior", [], False)
+            assert p["model"] == kimi, (v, p)
+            assert not any("ledger" in s for s in p["skipped"]), (v, p["skipped"])
+        rows = [_ledger_row(i, kimi, "failed") for i in range(3)]
+        led.write_text("".join(json.dumps(x) + "\n" for x in rows))
+        assert r.pick("mechanical", "senior", [], False)["model"] == mist       # three exact 'failed' rows drop
+    os.environ["HERMES_DISPATCH_LEDGER"] = NO_LEDGER
+
+
+def check_ledger_mixed_verdicts():
+    """Two counted strikes plus one clean run in the last 3 rows do not demote."""
+    r, qwen, mist, kimi = _ledger_case()
+    with tempfile.TemporaryDirectory() as d:
+        led = Path(d, "outcomes.jsonl")
+        os.environ["HERMES_DISPATCH_LEDGER"] = str(led)
+        rows = [_ledger_row(i, kimi, v) for i, v in enumerate(("failed", "failed", "done-clean"))]
         led.write_text("".join(json.dumps(x) + "\n" for x in rows))
         p = r.pick("mechanical", "senior", [], False)
         assert p["model"] == kimi, p
@@ -1443,7 +1478,7 @@ def check_ledger_bad_lines():
                '{"kind": "mechanical", "model": "x/y", "verdict": 5}']
         lines = []
         for i in range(3):
-            lines.append(json.dumps(_ledger_row(i, kimi, f"failed-{i}")) + "\n")
+            lines.append(json.dumps(_ledger_row(i, kimi, "failed")) + "\n")
             lines.append(bad[i] + "\n")
         led.write_text("".join(lines))
         p = r.pick("mechanical", "senior", [], False)
@@ -1461,7 +1496,7 @@ def check_ledger_all_skipped():
         rows = []
         for m in (qwen, "mistralai/Mistral-Medium-3.5-128K", kimi):           # the -128K suffix pins the size normalization
             for i in range(3):
-                rows.append(_ledger_row(len(rows), m, f"failed-{i}"))
+                rows.append(_ledger_row(len(rows), m, "failed"))
         led.write_text("".join(json.dumps(x) + "\n" for x in rows))
         p = r.pick("mechanical", "senior", [], False)
         assert p["model"] == kimi, p                                         # demotion is advisory when every rung is dead
@@ -1489,7 +1524,7 @@ def check_ledger_fallback_note_lanes_assign():
         rows = []
         for m in (qwen, mist, kimi):
             for i in range(3):
-                rows.append(_ledger_row(len(rows), m, f"failed-{i}"))
+                rows.append(_ledger_row(len(rows), m, "failed"))
         led.write_text("".join(json.dumps(x) + "\n" for x in rows))
         note = "ledger fallback: serving the unskipped order"
         for x in r.lanes("mechanical", "senior", [], []):
@@ -1541,7 +1576,7 @@ def _cli(args, routing=_CLI_TABLE, models=None, ledger=b"", latest=None):
 def check_ledger_invalid_utf8():
     """F1: one raw non-UTF-8 line must not kill the ledger reader. pick exits 0 and the rows
     around the bad line still demote Qwen."""
-    rows = [json.dumps(_ledger_row(i, QWEN, v)).encode() for i, v in enumerate(("hung", "failed", "failed-check"))]
+    rows = [json.dumps(_ledger_row(i, QWEN, v)).encode() for i, v in enumerate(("failed", "failed", "failed"))]
     ledger = rows[0] + b"\n\xff\n" + rows[1] + b"\n" + rows[2] + b"\n"
     p = _cli(["pick", "mechanical", "--tier", "intern"], models={m: {"ok": True} for m in (QWEN, MIST, KIMI)}, ledger=ledger)
     assert p.returncode == 0, p.stderr[-300:]
@@ -1555,7 +1590,7 @@ def check_fallback_ledger_demotes():
     """F2: a dead paid rung demotes to the next rung and never blocks; when every rung is dead the
     unskipped ladder serves and the reason says so. An impossible need still blocks."""
     def rows(m):
-        return b"".join(json.dumps(_ledger_row(i, m, "failed-check", "code")).encode() + b"\n" for i in range(3))
+        return b"".join(json.dumps(_ledger_row(i, m, "failed", "code")).encode() + b"\n" for i in range(3))
     dead_haiku = rows("fixture-haiku")                    # no flatiron health: the paid rungs lead
     p = _cli(["pick", "code", "--tier", "intern"], ledger=dead_haiku)
     out = json.loads(p.stdout)
@@ -1922,6 +1957,169 @@ def check_pin_contract_pick_assign_lanes():
     assert [e["model"] for e in json.loads(p.stdout)] == [QWEN, KIMI, HAIKU_B, SONNET_B, OPUS_B], p.stdout
 
 
+def check_unhealthy_floor():
+    """D2: a failed or unhealthy floor model opens the exception. With no healthy fitting local
+    rung at or above the tier floor, the local rungs start at the strongest healthy fitting model
+    below it, then the paid rungs at the paid floor; the paid floor never drops."""
+    r = load("hermes-dispatch-route")
+    r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9", "haiku": "claude-haiku-9", "sol": "x"}
+    cfg = {"rank": {"a/Weak": 1, "b/Mid": 2, "c/Floor": 3, "d/High": 4},
+           "routes": {"code": ["a/Weak", "b/Mid", "c/Floor", "d/High"]},
+           "paid_ladder": ["haiku", "sonnet", "opus"],
+           "tier_floor": {"intern": "a/Weak", "senior": "c/Floor"},
+           "paid_floor": {"intern": "haiku", "senior": "sonnet"},
+           "tiers": {"intern": {"reasoning_effort": "low"}, "senior": {"reasoning_effort": "high"}},
+           "features": {}}
+    r.routing = lambda: cfg
+    def health(**ok):
+        r.flatiron_status = lambda *a: {m.replace("_", "/"): {"ok": v} for m, v in ok.items()}
+    lanes = lambda failed=(): [x["model"] for x in r.lanes("code", "senior", list(failed), [])]
+    paid = ["claude-haiku-9", "claude-sonnet-9", "claude-opus-9"]
+    health(a_Weak=True, b_Mid=True, c_Floor=True, d_High=True)
+    assert lanes() == ["c/Floor", "d/High"] + paid[1:], lanes()
+    health(a_Weak=True, b_Mid=True, c_Floor=False, d_High=False)      # the whole floor band is down
+    assert lanes() == ["b/Mid"] + paid[1:], lanes()                   # the exception starts below the floor
+    health(a_Weak=True, b_Mid=True, c_Floor=True, d_High=True)
+    assert lanes(["c/Floor", "d/High"]) == ["b/Mid"] + paid[1:], "a failed floor opens the exception"
+    health(a_Weak=False, b_Mid=False, c_Floor=False, d_High=False)
+    assert lanes() == paid[1:], lanes()                               # nothing healthy below: the paid floor serves
+
+
+def check_caller_cap():
+    """D4: the caller model caps the ladder in the one strength order Qwen < GLM < MiMo <
+    Kimi-K3 < Haiku < Sonnet < Opus. Stronger rungs drop, the same model is allowed, a pin above
+    the cap is blocked, an exhausted capped ladder is blocked, gpt-6.1-sol is exempt through a
+    pin, and an unknown caller id opens no cap."""
+    MIMO = "XiaomiMiMo/MiMo-V2.6-Pro-MOPD"
+    r = load("hermes-dispatch-route")
+    r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9",
+                                   "haiku": "claude-haiku-9", "sol": "gpt-9-sol"}
+    cfg = {"rank": {QWEN: 3, "zai-org/GLM-5.3": 4, MIMO: 5, KIMI: 6},
+           "routes": {"code": [QWEN, "zai-org/GLM-5.3", MIMO, KIMI]},
+           "paid_ladder": ["haiku", "sonnet", "opus"],
+           "tier_floor": {"intern": QWEN, "senior": MIMO},
+           "paid_floor": {"intern": "haiku", "senior": "sonnet"},
+           "tiers": {"intern": {"reasoning_effort": "low"}, "senior": {"reasoning_effort": "high"}},
+           "features": {}}
+    r.routing = lambda: cfg
+    r.flatiron_status = lambda *a: {m: {"ok": True} for m in cfg["rank"]}
+    paid = ["claude-haiku-9", "claude-sonnet-9", "claude-opus-9"]
+    full = [QWEN, "zai-org/GLM-5.3", MIMO, KIMI] + paid
+    lanes = lambda caller, tier="intern": [x["model"] for x in r.lanes("code", tier, [], [], None, False, caller)]
+    assert lanes(None) == full, lanes(None)
+    assert lanes("claude-sonnet-9") == full[:-1], "a Sonnet caller never gets opus"
+    assert lanes("claude-opus-9") == full, "an Opus caller keeps the whole ladder"
+    assert lanes(MIMO) == [QWEN, "zai-org/GLM-5.3", MIMO], "a MiMo caller never climbs"
+    assert lanes(MIMO, "senior") == [MIMO], "the same model is allowed"
+    assert lanes("zz/Unknown") == full, "an unknown caller id opens no cap"
+    got = r.pick("code", "intern", [], False, [], None, MIMO)
+    assert any(s.startswith("claude-haiku-9") and "cap" in s for s in got["skipped"]), got["skipped"]
+    assert r.lanes("code", "senior", [], [], None, False, QWEN) == [], "the cap exhausts the capped ladder"
+    assert r.pick("code", "senior", [], False, [], None, QWEN)["reason"].startswith("blocked:"), "an exhausted capped ladder is blocked"
+    for pin, caller in ((KIMI, MIMO), (KIMI, QWEN), (MIMO, QWEN)):     # a pin above the cap
+        got = r.pick("code", "intern", [], False, [], pin, caller)
+        assert got["model"] is None and got["reason"].startswith("blocked:") and "caller" in got["reason"], (pin, caller, got)
+    assert r.pick("code", "intern", [], False, [], MIMO, MIMO)["model"] == MIMO, "the caller's own model runs"
+    sol = r.pick("code", "intern", [], False, [], "sol", QWEN)
+    assert (sol["provider"], sol["model"]) == ("openai-codex", "gpt-9-sol"), "gpt-6.1-sol is exempt through a pin"
+    ln = r.lanes("code", "intern", [], [], "sol", False, QWEN)
+    assert [x["model"] for x in ln] == ["gpt-9-sol"], ln            # nothing stronger sits above sol
+
+
+def check_team_size():
+    """D6: lanes and assign mark the team rungs with team_size 3: principal's local rungs and
+    every super rung. Principal's paid rung is one Opus child before super and stays unmarked."""
+    MIMO = "XiaomiMiMo/MiMo-V2.6-Pro-MOPD"
+    r = load("hermes-dispatch-route")
+    r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9", "haiku": "claude-haiku-9", "sol": "x"}
+    r.inflight_counts = lambda: {}
+    cfg = {"rank": {QWEN: 3, MIMO: 5, KIMI: 6},
+           "routes": {"code": [QWEN, MIMO, KIMI]},
+           "paid_ladder": ["haiku", "sonnet", "opus"],
+           "tier_floor": {"intern": QWEN, "principal": MIMO, "super": None},
+           "paid_floor": {"intern": "haiku", "principal": "opus", "super": "opus"},
+           "tiers": {"intern": {"reasoning_effort": "low"}, "principal": {"reasoning_effort": "high"},
+                     "super": {"reasoning_effort": "high"}},
+           "features": {}}
+    r.routing = lambda: cfg
+    r.flatiron_status = lambda *a: {m: {"ok": True} for m in cfg["rank"]}
+    out = r.lanes("code", "principal", [], [])
+    assert [x["model"] for x in out] == [MIMO, KIMI, "claude-opus-9"], out
+    assert [x.get("team_size") for x in out] == [3, 3, None], out
+    sup = r.lanes("code", "super", [], [])
+    assert [x["model"] for x in sup] == ["claude-opus-9"] and sup[0].get("team_size") == 3, sup
+    a = r.assign([("n1", "code", "principal", []), ("n2", "code", "super", [])])
+    assert [x.get("team_size") for x in a] == [3, 3], a
+    assert all("team_size" not in x for x in r.lanes("code", "intern", [], [])), "a plain rung carries no team_size"
+
+
+def _probe_world(d, rank, listed_ids):
+    """The D7 probe world: a live routing file, sidecars and cache beside it, offline probes."""
+    r = load("hermes-dispatch-route")
+    r.resolve_latest = lambda *a: {"at": 0, "opus": "claude-opus-9", "sonnet": "claude-sonnet-9",
+                                   "haiku": "claude-haiku-9", "sol": "x"}
+    home = Path(d)
+    (home / "cache").mkdir()
+    r.CACHE = home / "cache" / "dispatch-route.json"
+    r.SIDECAR_DIR = home / "side"
+    rj = home / "routing.json"
+    rj.write_text(json.dumps({"rank": dict(rank), "routes": {"code": list(rank)}, "tiers": {},
+                              "paid_ladder": []}))
+    r.ROUTING_FILE = rj
+    down = set()
+    def req(path, body=None, timeout=60):
+        if path == "/models":
+            return {"data": [{"id": m} for m in listed_ids]}
+        if body and body.get("model") in down:
+            raise OSError("down")
+        return {"choices": [{"message": {"content": "ok"}}]}
+    r._req = req
+    return r, rj, down
+
+
+def check_new_id_sync():
+    """D7: when the 60 s probe sees a served id with no rank, the router runs the sync ranking
+    step for it at once, under the lock, before it builds the ladder. A new id joins only after a
+    rank and a features probe."""
+    with tempfile.TemporaryDirectory() as d:
+        r, rj, _down = _probe_world(d, {"a/One": 2}, ["a/One", "n/New"])
+        r.probe_features = lambda m: {"vision": False, "web": False, "probed": "2026-11-10"}
+        r._selftest_ok = lambda *_: True
+        ranked = []
+        def fake_ranker(provider, model, rank, listed, timeout=600):
+            ranked.append((provider, model, sorted(listed)))
+            return {"order": {"a/One": 2, "n/New": 1}}
+        r._run_ranker = fake_ranker
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.flatiron_status(True)                       # the probe sees the unranked served id
+        assert ranked and ranked[0][2] == ["a/One", "n/New"], ranked
+        cfg = json.loads(rj.read_text())
+        assert cfg["rank"]["n/New"] == 1, cfg["rank"]     # the sync ranking step ranked it at once
+        assert cfg["features"]["n/New"]["vision"] is False, cfg["features"]   # and probed its features
+        assert [m for _p, m, _t in r.ladder([], [], "intern")] == ["n/New", "a/One"]
+
+
+def check_recovered_model():
+    """D7: a recovered model rejoins the ladder with no edit. Health alone moves it, no sync runs
+    for a ranked model, and the routing file stays byte for byte."""
+    with tempfile.TemporaryDirectory() as d:
+        r, rj, down = _probe_world(d, {"a/One": 2, "b/Two": 1}, ["a/One", "b/Two"])
+        def no_sync(*a, **k):
+            raise AssertionError("the sync steps ran for a ranked model")
+        r.sync_features = no_sync
+        r.sync_rank = no_sync
+        before = rj.read_text()
+        down.add("b/Two")
+        out = r.flatiron_status(True)                     # b/Two is down
+        assert not out["b/Two"]["ok"], out
+        assert [m for _p, m, _t in r.ladder([], [], "intern")] == ["a/One"]
+        down.clear()                                      # b/Two recovers
+        out = r.flatiron_status(True)
+        assert out["b/Two"]["ok"], out
+        assert [m for _p, m, _t in r.ladder([], [], "intern")] == ["b/Two", "a/One"]
+        assert rj.read_text() == before, "a recovery needs no routing edit"
+
+
 if __name__ == "__main__":
     os.environ["HERMES_DISPATCH_LEDGER"] = NO_LEDGER   # the live ledger never touches a check
     check_route(); check_tiers(); check_effort_clamp(); check_effort_round_down(); check_effort_unknown_names(); check_lanes(); check_needs(); check_default_features()
@@ -1945,4 +2143,6 @@ if __name__ == "__main__":
     check_pin_failed_blocked(); check_pin_needs_blocked(); check_pin_empty_exact_features()
     check_emitted_ids_pass_failed_validation(); check_paid_discovery_failure_keeps_local_rungs()
     check_pin_contract_pick_assign_lanes()
+    check_unhealthy_floor(); check_caller_cap(); check_team_size()
+    check_ledger_verdict(); check_new_id_sync(); check_recovered_model()
     print("selftest OK")

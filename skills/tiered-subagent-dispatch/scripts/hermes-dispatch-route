@@ -2,12 +2,12 @@
 """Model routing for the Hermes manager / tiered-subagent-dispatch workflow (Hermes only).
 
   hermes-dispatch-route status [--refresh]           flatiron health + resolved latest Claude/OpenAI ids
-  hermes-dispatch-route pick KIND [--tier T] [--failed MODEL ...] [--needs F[,F...]] [--refresh] [--pin MODEL]
+  hermes-dispatch-route pick KIND [--tier T] [--failed MODEL ...] [--needs F[,F...]] [--refresh] [--pin MODEL] [--caller MODEL]
                                                      -> JSON {provider, model, reason, flags, skipped}
-  hermes-dispatch-route lanes KIND [--tier T] [--needs F[,F...]] [--failed M[,...]] [--pin MODEL]
+  hermes-dispatch-route lanes KIND [--tier T] [--needs F[,F...]] [--failed M[,...]] [--pin MODEL] [--refresh] [--caller MODEL]
                                                      -> JSON line: every ladder rung for the request;
                                                         no rung prints one "blocked:" line, exit 3
-  hermes-dispatch-route assign NODE=KIND:TIER[:NEED,NEED] ... [--pin MODEL]
+  hermes-dispatch-route assign NODE=KIND:TIER[:NEED,NEED] ... [--pin MODEL] [--refresh] [--caller MODEL]
                                                      -> JSON list, one entry per node: the ladder
                                                         rung with the fewest in-flight jobs
                                                         (ties in ladder order), so one batch spreads out;
@@ -18,10 +18,12 @@
 
 KIND: code | frontend | debug | prose | mechanical | research | vision   (see ROUTES; vision needs image input)
 KIND does not choose the model: it validates, maps vision to --needs vision, and selects the ledger rows.
-TIER: intern | junior | senior | principal. The tier floors the ladder (tier_floor and paid_floor in
+TIER: intern | junior | senior | principal | super. The tier floors the ladder (tier_floor and paid_floor in
 ROUTING_FILE); it never names a model. The tier floor is tier_floor[TIER] first (its model must
 rank), then the legacy tiers[TIER].min_rank, then the intern floor; a missing or unknown tier takes
-the intern floor.
+the intern floor; a null tier floor (super) means no local rung and the ladder starts at the paid
+floor. team_size in lanes and assign marks the team rungs: principal's local rungs and every super
+rung run as a team of 3 children.
 
 Escalation ladder (user's standing order 2026-11-09): the manager picks a tier per task and the tier's
 floor model is the first rung; an API failure moves up the ladder inside one dispatch; a failed check
@@ -30,11 +32,13 @@ tier)` in that order: the on-ladder healthy flatiron models whose features cover
 at or above the tier floor (tier_floor maps tier to its floor model id), ascending RANK (lowest first; a
 model outside the rank map is excluded until sync ranks it), then the paid_ladder families at or after
 the tier's paid floor (paid_floor maps tier to a paid_ladder family) in list order at their latest ids.
-Need-wins: when no local model at or above the floor covers the needs, the local rungs start at the
-strongest fitting local model below the floor and go up from there; the paid floor never drops.
+Need-wins and the unhealthy floor share one rule: when no healthy local model at or above the floor
+fits, the local rungs start at the strongest healthy fitting local model below it; the paid rungs
+then follow at the paid floor, which never drops.
 A flatiron model entry (features[model]) may carry "ladder": false and is then never a rung; a missing key
 means on the ladder. gpt-6.1-sol and any family outside paid_ladder are never rungs. Failed ids and
-unhealthy flatiron models are skipped. A ledger demotion (3 failed runs of this KIND) drops a rung, and
+unhealthy flatiron models are skipped. A ledger demotion (3 rows of this KIND with the exact verdict
+'failed'; no other verdict counts) drops a rung, and
 when every rung is demoted the unskipped ladder is served with a note. No rung at all is `blocked`: one
 line with the healthy free models and their features plus the paid models, and exit code 3.
 Pin rules (unchanged): `--pin MODEL` is the explicit pin (delegate_task calls it `pin_model`): MODEL is the
@@ -60,6 +64,12 @@ Flags: --reasoning EFFORT only on a flatiron pick, clamped to the efforts the mo
 in ROUTING_FILE) and to the entry's max_effort: min(requested, max_effort); -s SKILL per tier skill on
 every pick. The delegation-tiers plugin imports `ladder()` and `effective_effort()` from this script, so
 its primary effort and its chain cannot drift from pick's.
+Caller cap (user's standing order 2026-11-10): --caller MODEL names the caller's own model, and the
+delegation-tiers plugin passes the parent session's model into ladder(). Every rung stronger than the
+caller model in the one strength order (rank band, then the paid families: Qwen < GLM < MiMo <
+Kimi-K3 < Haiku < Sonnet < Opus) is dropped; the same model is allowed. A pin above the cap is
+blocked, an exhausted capped ladder is blocked and never climbs past the cap, and gpt-6.1-sol is
+exempt (the reviewer, pin only). An unknown caller id opens no cap.
 Ranks, per-kind hints, paid_ladder and tiers live in ROUTING_FILE (JSON) so they can be tuned without
 editing code.
 ROUTING_FILE resolves over HERMES_DISPATCH_ROUTING_FILE, the references/ dir beside this script's
@@ -243,7 +253,22 @@ def flatiron_status(refresh=False):
         with cf.ThreadPoolExecutor(len(targets)) as ex:
             models = dict(ex.map(probe_one, targets))
     save_section("flatiron", {"at": time.time(), "models": models, "listed": listed})
+    _sync_new_ids(models, listed)   # D7: rank a served id with no rank at once, before any ladder
     return models
+
+
+def _sync_new_ids(models, listed):
+    """D7: when the probe sees a served id with no rank, run the sync ranking step for it at once,
+    under the existing locks, before any ladder is built. A new id joins the ladder only after
+    sync gives it a rank and a features probe; a recovered model rejoins with no edit."""
+    try:
+        rank = routing().get("rank") or {}
+    except RoutingFileError:
+        return
+    if not [m for m in listed if m not in rank]:
+        return
+    sync_features(models, listed)
+    sync_rank(_latest_soft(), models, listed)
 
 
 def _hermes_python():
@@ -415,8 +440,10 @@ def _norm_model(m):
 
 
 def _ledger_dead(kind):
-    """Models whose last 3 ledger rows for this kind all failed, keyed by normalized id. A
-    missing file or a bad line gives no entry: the ledger never crashes pick."""
+    """Models with 3 counted ledger rows for this kind, keyed by normalized id. A row counts only
+    when its verdict string is exactly 'failed': missed-defects, blocked, interrupted, hung and
+    fabricated never count toward the drop. A missing file or a bad line gives no entry: the ledger
+    never crashes pick."""
     try:
         lines = Path(os.environ.get(LEDGER_OVERRIDE) or SIDECAR_DIR / "outcomes.jsonl").read_bytes().splitlines()
     except OSError:
@@ -430,11 +457,10 @@ def _ledger_dead(kind):
             continue  # a missing or bad line never crashes pick: skip the line
         if k == kind and isinstance(m, str) and isinstance(v, str):
             hist.setdefault(_norm_model(m), []).append(v)
-    bad = ("hung", "fabricated", "missed-defects", "failed")  # failure verdicts, hyphenated forms included
     out = {}
     for m, vs in hist.items():
-        last = vs[-3:]
-        out[m] = len(last) == 3 and all(v.startswith(bad) for v in last)
+        strikes = [v for v in vs if v == "failed"]  # only the exact verdict 'failed' is a strike
+        out[m] = len(strikes) >= 3
     return out
 
 
@@ -455,15 +481,18 @@ def _entry_for(feats, model, fam=None):
 
 
 def tier_floor(cfg, tier):
-    """The rank the tier's local ladder starts at. tier_floor maps tier to its floor model id and
-    wins when that model ranks; the legacy tiers[TIER].min_rank serves next for a known tier (a
-    non-integer min_rank is ignored); the intern floor serves last. A missing or unknown tier
-    (in neither map) resolves the intern floor the same way a named tier resolves its own:
-    the intern mapped model rank, then tiers.intern.min_rank, else zero. No usable entry means
-    no floor (0)."""
+    """The rank the tier's local ladder starts at, or None for no local rung at all (a null
+    tier_floor entry, like super: that ladder starts at the paid floor). tier_floor maps tier to
+    its floor model id and wins when that model ranks; the legacy tiers[TIER].min_rank serves next
+    for a known tier (a non-integer min_rank is ignored); the intern floor serves last. A missing
+    or unknown tier (in neither map) resolves the intern floor the same way a named tier resolves
+    its own: the intern mapped model rank, then tiers.intern.min_rank, else zero. No usable entry
+    means no floor (0)."""
     tf = cfg.get("tier_floor") or {}
     rank = cfg.get("rank") or {}
     tiers = cfg.get("tiers") or {}
+    if tier in tf and tf[tier] is None:
+        return None   # an explicit null floor: no local rung, the ladder starts at the paid floor
 
     def _floor(T):
         """The floor T's own entries give: its mapped model rank, else its legacy min_rank.
@@ -478,6 +507,8 @@ def tier_floor(cfg, tier):
         got = _floor(tier)
         if got is not None:
             return got
+    if tf.get("intern") is None and "intern" in tf:
+        return None   # the intern fallback is itself null: no local rung
     return _floor("intern") or 0
 
 
@@ -490,28 +521,60 @@ def paid_floor(cfg, tier):
     return fams.index(fam) if fam in fams else 0
 
 
-def ladder(needs=None, failed=(), tier=None, pinned=None):
+def _caller_key(cfg, caller):
+    """The cap a caller model puts on the ladder: its own ladder key, or None for no cap. The
+    router learns the caller model from the delegation-tiers plugin (the parent session's model).
+    An unknown id opens no cap (its strength cannot be compared), and gpt-6.1-sol is exempt: the
+    reviewer runs only as a pin and never writes code."""
+    if not caller:
+        return None
+    if caller in cfg["rank"]:
+        return _ladder_key(cfg, "flatiron", caller)
+    fam = _paid_family(caller)
+    if fam == "sol":
+        return None
+    if fam or any(m == caller for m in _latest_soft().values()):
+        return _ladder_key(cfg, CLAUDE, caller)
+    return None
+
+
+def _pin_over_cap(cfg, provider, model, caller):
+    """True when a pin runs stronger than the caller's own model (user cap 2026-11-10): the pin is
+    blocked and no substitute is selected. The same model is allowed; gpt-6.1-sol is exempt."""
+    cap = _caller_key(cfg, caller)
+    return cap is not None and _paid_family(model) != "sol" and _ladder_key(cfg, provider, model) > cap
+
+
+def _team_size(provider, tier):
+    """D6: principal's local rungs and every super rung run as a team of 3 children. Principal
+    ends at one Opus child before super, so its paid rungs are not team rungs."""
+    return 3 if tier == "super" or (tier == "principal" and provider == "flatiron") else None
+
+
+def ladder(needs=None, failed=(), tier=None, pinned=None, caller=None):
     """The escalation rungs for these needs and this tier, cheapest fitting first; one (provider,
     model, top effort) per rung, and the entry the delegation-tiers plugin imports alongside
     effective_effort(). Order: on-ladder healthy flatiron models whose features cover every need
     with a rank at or above the tier floor (tier_floor; a missing or unknown tier takes the intern
-    floor), ascending rank, then the paid_ladder families at or after the tier's paid floor
-    (paid_floor) in list order at their latest ids. pinned: the routed pin of a `lanes --pin` or
-    plugin pin_model chain as (provider, model); a pin overrides the local tier floor, so the
-    local rungs start at the bottom and the caller keeps the ones above the pin, and a paid pin
-    also drops the paid floor, so the chain can continue at the paid rungs after the pin in
-    paid_ladder order. Need-wins: when no local model at or above the
-    floor covers the needs, the local rungs start at the strongest fitting local model below the
-    floor and go up from there; the paid floor never drops. The floor and the needs check coverage
-    only: a failed or unhealthy floor model does not open the exception. A model
-    outside the rank map is excluded (never a rung until sync ranks it). Failed ids and unhealthy
-    flatiron models are skipped. A features entry may carry "ladder": false and its model is then
-    never a rung; a missing key means on the ladder. A missing exact features entry falls back to
-    the family entry; an exact entry, even empty, wins. The top effort is the entry's max_effort
-    run through effective_effort(model, cap): the highest effort the rung can ever run at, snapped
-    to what its efforts map accepts (None = no cap). gpt-6.1-sol and any family outside
-    paid_ladder are never rungs. A failed paid discovery drops the paid rungs; it never blocks
-    these local ones."""
+    floor; a null floor means no local rung), ascending rank, then the paid_ladder families at or
+    after the tier's paid floor (paid_floor) in list order at their latest ids. pinned: the routed
+    pin of a `lanes --pin` or plugin pin_model chain as (provider, model); a pin overrides the
+    local tier floor, so the local rungs start at the bottom and the caller keeps the ones above
+    the pin, and a paid pin also drops the paid floor, so the chain can continue at the paid rungs
+    after the pin in paid_ladder order. One rule opens both exceptions: when no healthy fitting
+    local rung sits at or above the floor (a need the floor models lack, or a failed or unhealthy
+    floor), the local rungs start at the strongest healthy fitting local model below the floor and
+    the paid rungs follow at the paid floor; the paid floor never drops. caller: the parent
+    session's model (the plugin passes it). Every rung stronger than the caller model in the one
+    strength order (rank band, then the paid families) is dropped; the same model is allowed. A
+    model outside the rank map is excluded (never a rung until sync ranks it). Failed ids and
+    unhealthy flatiron models are skipped. A features entry may carry "ladder": false and its
+    model is then never a rung; a missing key means on the ladder. A missing exact features entry
+    falls back to the family entry; an exact entry, even empty, wins. The top effort is the
+    entry's max_effort run through effective_effort(model, cap): the highest effort the rung can
+    ever run at, snapped to what its efforts map accepts (None = no cap). gpt-6.1-sol and any
+    family outside paid_ladder are never rungs. A failed paid discovery drops the paid rungs; it
+    never blocks these local ones."""
     cfg = routing()
     needs = set(needs or ())
     failed = {m for a in (failed or ()) for m in (a.split(",") if isinstance(a, str) else [a]) if m}
@@ -531,16 +594,17 @@ def ladder(needs=None, failed=(), tier=None, pinned=None):
         return effective_effort(model, cap) if cap else None
 
     on_ladder = lambda m: _entry_for(feats, m).get("ladder") is not False
-    floor = 0 if pinned else tier_floor(cfg, tier)   # a pin overrides the local tier floor
-    covers_above = [m for m in rank if rank[m] >= floor and on_ladder(m) and fits(m)]
+    floor = tier_floor(cfg, tier)     # None: no local rung at all (super)
+    if pinned and floor is not None:
+        floor = 0                     # a pin overrides the local tier floor
     rungs = [m for m in sorted(rank, key=lambda m: rank[m])
              if on_ladder(m) and m not in failed and health.get(m, {}).get("ok") and fits(m)]
-    above = [m for m in rungs if rank[m] >= floor]
-    if covers_above:
-        local = above
-    else:  # need-wins: nothing at or above the floor covers the needs; start at the strongest below
+    if floor is None:
+        local = []                                    # no local rung at this tier (super)
+    else:
+        above = [m for m in rungs if rank[m] >= floor]
         below = [m for m in rungs if rank[m] < floor]
-        local = [max(below, key=lambda m: rank[m])] if below else []
+        local = above or ([max(below, key=lambda m: rank[m])] if below else [])
     out = [("flatiron", m, top(m)) for m in local]
     latest = _latest_soft()
     # a paid pin continues at the paid rungs after it: the paid floor drops too, the caller cuts
@@ -551,15 +615,21 @@ def ladder(needs=None, failed=(), tier=None, pinned=None):
             continue
         if fits(mid, fam):
             out.append((CLAUDE, mid, top(mid, fam)))
-    return out
+    cap = _caller_key(cfg, caller)    # the caller cap drops every stronger rung
+    return [r for r in out if cap is None or _ladder_key(cfg, r[0], r[1]) <= cap]
 
 
-def _rungs(kind, tier, needs, failed, skipped, pinned=None):
+def _rungs(kind, tier, needs, failed, skipped, pinned=None, caller=None):
     """The rungs pick, lanes and assign serve, in ladder order: ladder() with the tier floor
-    (tier_floor and paid_floor) and the kind's ledger demotion. pinned: a `lanes --pin` head
-    (provider, model); the pin overrides the local tier floor.
+    (tier_floor and paid_floor), the kind's ledger demotion and the caller model cap. pinned: a
+    `lanes --pin` head (provider, model); the pin overrides the local tier floor. A rung the cap
+    drops lands in skipped, so a capped-empty ladder explains itself.
     When every rung is demoted the unskipped ladder is served: the demotion is advisory."""
-    rungs = list(ladder(needs, failed, tier, pinned))
+    rungs = list(ladder(needs, failed, tier, pinned, caller))
+    if caller:
+        for r in ladder(needs, failed, tier, pinned):
+            if r not in rungs:
+                skipped.append(f"{r[1]}: cap: stronger than the caller model {caller}")
     dead = _ledger_dead(kind)
 
     def walk(demote):
@@ -658,7 +728,7 @@ def blocked_line(kind, tier, failed, needs, cfg, health, latest):
             + (f"; pin only: {latest.get('sol')}" if latest.get("sol") else ""))
 
 
-def pick(kind, tier, failed, refresh, needs=None, pin=None):
+def pick(kind, tier, failed, refresh, needs=None, pin=None, caller=None):
     cfg, tcfg, needs = _pick_setup(kind, tier, needs)
     flatiron_status(refresh)   # a --refresh pick re-probes before the ladder reads health
     failed = {m for arg in (failed or []) for m in arg.split(",") if m}  # --failed MODEL ... or MODEL,... list
@@ -671,13 +741,15 @@ def pick(kind, tier, failed, refresh, needs=None, pin=None):
         f = _entry_for(feats, model, fam)
         lacking = [n for n in needs if not f.get(n)]
         why = ("it is in --failed" if model in failed
-               else f"lacks {', '.join(lacking)}" if lacking else None)
+               else f"lacks {', '.join(lacking)}" if lacking
+               else f"it is stronger than the caller model {caller}" if _pin_over_cap(cfg, provider, model, caller)
+               else None)
         if why:  # an incompatible pin is blocked, never replaced by another model
             return {"provider": None, "model": None, "flags": None,
                     "reason": _pin_blocked(model, kind, tier, needs, why), "skipped": skipped}
         return {"provider": provider, "model": model, "flags": _rung_flags(provider, model, tcfg, cfg),
                 "reason": f"explicit pin {pin}", "skipped": skipped}
-    rungs = _rungs(kind, tier, needs, failed, skipped)
+    rungs = _rungs(kind, tier, needs, failed, skipped, None, caller)
     if rungs:
         provider, model, _cap = rungs[0]
         return {"provider": provider, "model": model, "flags": _rung_flags(provider, model, tcfg, cfg),
@@ -691,33 +763,43 @@ def pick(kind, tier, failed, refresh, needs=None, pin=None):
             "skipped": skipped}
 
 
-def _lane_entry(rung, tcfg, cfg):
+def _lane_entry(rung, tcfg, cfg, tier=None):
     provider, model, _cap = rung
-    return {"provider": provider, "model": model, "flags": _rung_flags(provider, model, tcfg, cfg),
-            "rank": cfg["rank"].get(model)}
+    out = {"provider": provider, "model": model, "flags": _rung_flags(provider, model, tcfg, cfg),
+           "rank": cfg["rank"].get(model)}
+    team = _team_size(provider, tier)               # team rungs carry the team_size field
+    if team:
+        out["team_size"] = team
+    return out
 
 
-def lanes(kind, tier, failed, needs, pin=None):
+def lanes(kind, tier, failed, needs, pin=None, refresh=False, caller=None):
     """Every rung pick would serve for this batch, one entry per rung in ladder order, each with
-    the flags its lane job runs. `--pin MODEL` starts at MODEL and continues up the ladder from
-    MODEL's position (the rungs above it). No rung: an empty list, and the CLI reports blocked.
-    Health: cached probe."""
+    the flags its lane job runs and a team_size field on the team rungs. `--pin MODEL` starts at
+    MODEL and continues up the ladder from MODEL's position (the rungs above it). No rung: an
+    empty list, and the CLI reports blocked. caller: the parent session's model, the cap.
+    Health: cached probe, or a fresh one on --refresh."""
     cfg, tcfg, needs = _pick_setup(kind, tier, needs)
+    if refresh:
+        flatiron_status(True)   # a --refresh lanes re-probes before the ladder reads health
     _check_ids("--failed", failed)
     sk = []
     if pin:
-        p = pick(kind, tier, failed, False, needs, pin)
+        p = pick(kind, tier, failed, False, needs, pin, caller)
         if p["model"] is None:
             return []
         head = {"provider": p["provider"], "model": p["model"], "flags": p["flags"],
                 "rank": cfg["rank"].get(p["model"]), "reason": p["reason"]}
+        team = _team_size(p["provider"], tier)          # a team rung head carries team_size
+        if team:
+            head["team_size"] = team
         pk = _ladder_key(cfg, p["provider"], p["model"])
         # the pin overrides the local tier floor; a paid pin drops the paid floor too
-        up = [r for r in _rungs(kind, tier, needs, failed, sk, (p["provider"], p["model"]))
+        up = [r for r in _rungs(kind, tier, needs, failed, sk, (p["provider"], p["model"]), caller)
               if _ladder_key(cfg, r[0], r[1]) > pk]
-        return [head] + [dict(_lane_entry(r, tcfg, cfg),
+        return [head] + [dict(_lane_entry(r, tcfg, cfg, tier),
                               reason=f"up the ladder from pinned {p['model']}") for r in up]
-    out = [_lane_entry(r, tcfg, cfg) for r in _rungs(kind, tier, needs, failed, sk)]
+    out = [_lane_entry(r, tcfg, cfg, tier) for r in _rungs(kind, tier, needs, failed, sk, None, caller)]
     note = f"escalation ladder rungs for {kind}" + _ledger_fb_note(sk)
     for x in out:
         x["reason"] = note
@@ -810,19 +892,22 @@ def inflight_counts():
     return counts
 
 
-def assign(specs, pin=None):
+def assign(specs, pin=None, refresh=False, caller=None):
     """Load-balanced batch pick: every node takes its eligible ladder rung with the fewest in-flight
     jobs (ties in ladder order, quota-free flatiron rungs before paid ones) and raises that model's
-    running count before the next node, so one batch spreads over the local rungs. No model cap: a
-    rung serves every node that fits its eligibility. `--pin MODEL` gives every node exactly MODEL,
-    under pick's pin rules per node. A node with no rung gets the blocked line and no model."""
+    running count before the next node, so one batch spreads over the local rungs. No model cap
+    beyond the caller cap: a rung serves every node that fits its eligibility. `--pin MODEL` gives
+    every node exactly MODEL, under pick's pin rules per node (a pin above the caller cap is
+    blocked). A node with no rung gets the blocked line and no model. Team rungs carry team_size."""
+    if refresh:
+        flatiron_status(True)   # a --refresh assign re-probes before the ladder reads health
     counts = inflight_counts()
     out = []
     for node, kind, tier, needs in specs:
         cfg, tcfg, needs = _pick_setup(kind, tier, needs)
         sk = []
         if pin:  # the pin names the model: every node takes exactly that model, never another rung
-            p = pick(kind, tier, [], False, needs, pin)
+            p = pick(kind, tier, [], False, needs, pin, caller)
             if p["model"] is None:
                 out.append({"node": node, "kind": kind, "tier": tier, "provider": None,
                             "model": None, "flags": None, "load": 0,
@@ -830,23 +915,31 @@ def assign(specs, pin=None):
                 continue
             load = counts.get(p["model"], 0)
             counts[p["model"]] = load + 1
-            out.append({"node": node, "kind": kind, "tier": tier, "provider": p["provider"],
-                        "model": p["model"], "flags": p["flags"], "load": load,
-                        "reason": f"explicit pin {pin}", "fallback": False})
+            entry = {"node": node, "kind": kind, "tier": tier, "provider": p["provider"],
+                     "model": p["model"], "flags": p["flags"], "load": load,
+                     "reason": f"explicit pin {pin}", "fallback": False}
+            team = _team_size(p["provider"], tier)
+            if team:
+                entry["team_size"] = team
+            out.append(entry)
             continue
-        el = _rungs(kind, tier, needs, [], sk)
+        el = _rungs(kind, tier, needs, [], sk, None, caller)
         if el:
             provider, m, _cap = min(el, key=lambda r: (r[0] != "flatiron", counts.get(r[1], 0)))
             reason = f"least in-flight of {len(el)} eligible ladder rung{'' if len(el) == 1 else 's'} for {kind}"
             reason += _ledger_fb_note(sk)
             load = counts.get(m, 0)
             counts[m] = load + 1
-            out.append({"node": node, "kind": kind, "tier": tier, "provider": provider, "model": m,
-                        "flags": _rung_flags(provider, m, tcfg, cfg), "load": load,
-                        "reason": reason,
-                        "fallback": False})
+            entry = {"node": node, "kind": kind, "tier": tier, "provider": provider, "model": m,
+                     "flags": _rung_flags(provider, m, tcfg, cfg), "load": load,
+                     "reason": reason,
+                     "fallback": False}
+            team = _team_size(provider, tier)          # team rungs carry the team_size field
+            if team:
+                entry["team_size"] = team
+            out.append(entry)
         else:
-            fb = pick(kind, tier, [], False, needs)   # blocked line; no rung and no substitute
+            fb = pick(kind, tier, [], False, needs, None, caller)   # blocked line; no rung and no substitute
             out.append({"node": node, "kind": kind, "tier": tier, "provider": None,
                         "model": None, "flags": None, "load": 0,
                         "reason": fb["reason"], "fallback": True})
@@ -1428,17 +1521,24 @@ def main():
     p.add_argument("--failed", nargs="*", default=[]); p.add_argument("--refresh", action="store_true")
     p.add_argument("--needs", default="", help="comma list of required features, e.g. vision,web")
     p.add_argument("--pin", default=None, help="the caller's explicit model pin (pin_model): an exact id or haiku|sonnet|opus|sol")
+    p.add_argument("--caller", default=None, help="the caller's own model (the cap): no rung stronger than it")
     ln = sub.add_parser("lanes"); ln.add_argument("kind"); ln.add_argument("--tier", default="intern")
     ln.add_argument("--failed", nargs="*", default=[])
     ln.add_argument("--needs", default="", help="comma list of required features, e.g. vision,web")
     ln.add_argument("--pin", default=None, help="the caller's explicit model pin (pin_model): an exact id or haiku|sonnet|opus|sol")
+    ln.add_argument("--refresh", action="store_true")
+    ln.add_argument("--caller", default=None, help="the caller's own model (the cap): no rung stronger than it")
     g = sub.add_parser("assign"); g.add_argument("nodes", nargs="+", metavar="NODE=KIND:TIER[:NEED,NEED]")
     g.add_argument("--pin", default=None, help="the caller's explicit model pin (pin_model): an exact id or haiku|sonnet|opus|sol; every node takes exactly it")
+    g.add_argument("--refresh", action="store_true")
+    g.add_argument("--caller", default=None, help="the caller's own model (the cap): no rung stronger than it")
     l = sub.add_parser("latest"); l.add_argument("family", choices=["opus", "sonnet", "sol", "haiku"])
     l.add_argument("--refresh", action="store_true")
     y = sub.add_parser("sync"); y.add_argument("--refresh", action="store_true")
     mo = sub.add_parser("models"); mo.add_argument("--refresh", action="store_true")
     a = ap.parse_args()
+    if getattr(a, "caller", None):
+        _check_ids("--caller", [a.caller])
     if a.cmd == "sync":
         return sync(a.refresh)
     if a.cmd == "models":
@@ -1447,7 +1547,7 @@ def main():
         print(json.dumps({"flatiron": flatiron_status(a.refresh), "latest": {k: v for k, v in resolve_latest(a.refresh).items() if k != "at"}}, indent=1))
     elif a.cmd == "pick":
         needs = [n.strip() for n in a.needs.split(",") if n.strip()]
-        out = pick(a.kind, a.tier, a.failed, a.refresh, needs, a.pin)
+        out = pick(a.kind, a.tier, a.failed, a.refresh, needs, a.pin, a.caller)
         if out["model"] is None:
             print(out["reason"])                     # the blocked line, then the distinct exit code
             return BLOCKED_EXIT
@@ -1455,9 +1555,9 @@ def main():
     elif a.cmd == "lanes":
         needs = [n.strip() for n in a.needs.split(",") if n.strip()]
         failed = [m for arg in a.failed for m in arg.split(",") if m]  # --failed MODEL ... or a comma list
-        out = lanes(a.kind, a.tier, failed, needs, a.pin)
+        out = lanes(a.kind, a.tier, failed, needs, a.pin, a.refresh, a.caller)
         if not out:
-            print(pick(a.kind, a.tier, failed, False, needs, a.pin)["reason"])
+            print(pick(a.kind, a.tier, failed, False, needs, a.pin, a.caller)["reason"])
             return BLOCKED_EXIT
         print(json.dumps(out))  # one line: the manager greps it into lane jobs
     elif a.cmd == "assign":
@@ -1469,7 +1569,7 @@ def main():
                 sys.exit(f"assign: bad node spec {spec!r}; want NODE=KIND:TIER[:NEED,NEED]")
             needs = [n.strip() for n in parts[2].split(",") if n.strip()] if len(parts) == 3 else []
             specs.append((node, parts[0], parts[1], needs))
-        out = assign(specs, a.pin)
+        out = assign(specs, a.pin, a.refresh, a.caller)
         blocked = [e for e in out if not e["model"]]
         if blocked:
             for e in blocked:
