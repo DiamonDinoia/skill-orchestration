@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Schedule subagent dispatch. GRAPH: {"nodes": {"ID": {"deps": [], "files": [], "resources": [], "state": "todo", "tier": "junior"}}}.
 A '#' in a files entry separates the path from the symbol, so a filename that contains '#' cannot be named.
-Tiers: intern < junior < senior < principal; a node without a tier is intern. escalate retries a failed node one tier up.
+Tiers: intern < junior < senior < principal < super; a node without a tier is intern. escalate retries a failed node one tier up.
 States: todo, running, done, failed. Every command first rejects a graph that `check` rejects.
 Exit 0 ok, 1 invalid graph or refused move, 2 usage or filesystem. Stdlib only, python3 >= 3.9."""
 
@@ -17,7 +17,7 @@ from graphlib import CycleError, TopologicalSorter
 USAGE = "usage: dag.py check GRAPH | plan GRAPH | show GRAPH [--slots N] | dag.py ready GRAPH [--max N] | dag.py start|done|fail|retry GRAPH ID... | dag.py escalate GRAPH ID | dag.py add GRAPH ID [--deps a,b] [--files x,y] [--resources r] [--tier T]"
 MOVES = {"start": ("todo", "running"), "done": ("running", "done"), "fail": ("running", "failed")}
 STATES = {"todo", "running", "done", "failed"}
-TIERS = ("intern", "junior", "senior", "principal")
+TIERS = ("intern", "junior", "senior", "principal", "super")
 
 def dependents(nodes, ids):
     """Every node whose output depends on one of `ids`; reads deps only, not states."""
@@ -97,8 +97,8 @@ def move(nodes, cmd, ids):
             return [f"unknown node {i}"], ""
         if nodes[i]["state"] != "failed":
             return [f"cannot escalate {i}: state is not failed"], ""
-        if nodes[i]["tier"] == "principal":
-            return [f"cannot escalate {i}: already principal; the failure goes to the parent manager"], ""
+        if nodes[i]["tier"] == "super":
+            return [f"cannot escalate {i}: already super; the failure goes to the parent manager"], ""
         errs, _ = move(nodes, "retry", ids)
         if errs:
             return errs, ""
@@ -273,7 +273,8 @@ def selftest():
             finally:
                 os.chmod(rodir, 0o755)
         for g3, args, frag in [({"a": {"tier": "chief"}}, ("check",), "node a: invalid tier chief"),
-                               ({"a": {"state": "failed", "tier": "principal"}}, ("escalate", "a"), "already principal"),
+                               ({"a": {"tier": "bogus"}}, ("check",), "node a: invalid tier bogus"),
+                               ({"a": {"state": "failed", "tier": "super"}}, ("escalate", "a"), "already super"),
                                ({"a": {"state": "todo", "tier": "junior"}}, ("escalate", "a"), "state is not failed")]:
             write(g3)
             before = open(graph, "rb").read()
@@ -324,6 +325,14 @@ def selftest():
         got = json.load(open(graph, encoding="utf-8"))["nodes"]
         ok(res.returncode == 0 and res.stdout == "a: junior -> senior\n" and got["a"]["tier"] == "senior"
            and got["a"]["state"] == "todo" and got["b"]["state"] == "todo", "escalate bumps the tier and retries")
+        write({"a": {"tier": "super"}})
+        res = run("check")
+        ok(res.returncode == 0 and res.stdout == "ok\n", "tier super passes check")
+        write({"a": {"state": "failed", "tier": "principal"}})
+        res = run("escalate", "a")
+        got = json.load(open(graph, encoding="utf-8"))["nodes"]
+        ok(res.returncode == 0 and res.stdout == "a: principal -> super\n" and got["a"]["tier"] == "super",
+           "escalate moves a failed principal node to super")
         write({"a": {"tier": "junior"}, "b": {"deps": ["a"], "tier": "junior"}})
         plain = run("show")
         idle = run("show", "--slots", "2")
