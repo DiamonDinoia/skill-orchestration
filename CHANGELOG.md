@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.3.4
+- Dispatch: `tier_floor` and `paid_floor` set each tier's local floor and paid floor. A null local floor starts the ladder at the paid floor.
+- Dispatch: when no healthy local model at or above the tier floor fits, the local rungs start at the strongest healthy local model below it.
+- Dispatch: only the ledger verdict `failed` counts toward the 3-strike drop. The verdicts missed-defects, blocked, interrupted, hung and fabricated never count.
+- Dispatch: the router drops every rung stronger than the caller model. A pin above the cap and an exhausted capped ladder return blocked. Sol is exempt as a reviewer.
+- Tiers: `super` is an Opus team and runs only after principal fails. `dag.py` escalates a failed principal node to super.
+- Teams: principal and super run as teams of 3 children, marked by `team_size` in `lanes` and `assign`. The manager skill holds the dispatch rule.
+- Health: when the 60 s probe sees the served list change, the router ranks the new ids at once. `lanes` and `assign` gain `--refresh`.
+- Documented limits: core `ROUTE_KEYS` drops the plugin's `team_size` route key. Team dispatch is a manager rule driven by router `lanes` and `assign` output, so `team_size` there is what matters.
+- Version fields are 2.3.4 in every manifest and skill.
+
 ## 2.3.3
 - Dispatch: a pin overrides the local tier floor. `lanes --pin MODEL` and the plugin `pin_model` chain continue at every healthy fitting local rung above MODEL, then the paid rungs from the tier's paid floor; a paid pin continues at the paid rungs after MODEL in `paid_ladder` order. `pick --pin` and `assign --pin` stay exactly MODEL.
 - Dispatch: the tier floor is `tier_floor[TIER]` first (its model must rank), then the legacy `tiers[TIER].min_rank`, then the intern floor; a missing or unknown tier takes the intern floor directly.
