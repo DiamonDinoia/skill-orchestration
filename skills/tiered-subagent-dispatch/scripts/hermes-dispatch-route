@@ -458,19 +458,27 @@ def tier_floor(cfg, tier):
     """The rank the tier's local ladder starts at. tier_floor maps tier to its floor model id and
     wins when that model ranks; the legacy tiers[TIER].min_rank serves next for a known tier (a
     non-integer min_rank is ignored); the intern floor serves last. A missing or unknown tier
-    (in neither map) takes the intern floor directly. No usable entry means no floor (0)."""
+    (in neither map) resolves the intern floor the same way a named tier resolves its own:
+    the intern mapped model rank, then tiers.intern.min_rank, else zero. No usable entry means
+    no floor (0)."""
     tf = cfg.get("tier_floor") or {}
     rank = cfg.get("rank") or {}
     tiers = cfg.get("tiers") or {}
-    if tier in tf or tier in tiers:
-        mid = tf.get(tier)
+
+    def _floor(T):
+        """The floor T's own entries give: its mapped model rank, else its legacy min_rank.
+        None when neither resolves."""
+        mid = tf.get(T)
         if mid in rank:
             return rank[mid]
-        mr = (tiers.get(tier) or {}).get("min_rank")
-        if type(mr) is int:
-            return mr
-    intern = tf.get("intern")
-    return rank.get(intern, 0) if intern is not None else 0
+        mr = (tiers.get(T) or {}).get("min_rank")
+        return mr if type(mr) is int else None
+
+    if tier in tf or tier in tiers:
+        got = _floor(tier)
+        if got is not None:
+            return got
+    return _floor("intern") or 0
 
 
 def paid_floor(cfg, tier):
