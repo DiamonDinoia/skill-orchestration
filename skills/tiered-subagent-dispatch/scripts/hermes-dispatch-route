@@ -19,7 +19,9 @@
 KIND: code | frontend | debug | prose | mechanical | research | vision   (see ROUTES; vision needs image input)
 KIND does not choose the model: it validates, maps vision to --needs vision, and selects the ledger rows.
 TIER: intern | junior | senior | principal. The tier floors the ladder (tier_floor and paid_floor in
-ROUTING_FILE); it never names a model. A missing or unknown tier takes the intern floor.
+ROUTING_FILE); it never names a model. The tier floor is tier_floor[TIER] first (its model must
+rank), then the legacy tiers[TIER].min_rank, then the intern floor; a missing or unknown tier takes
+the intern floor.
 
 Escalation ladder (user's standing order 2026-11-09): the manager picks a tier per task and the tier's
 floor model is the first rung; an API failure moves up the ladder inside one dispatch; a failed check
@@ -46,8 +48,10 @@ the family entry applies only when the exact key is absent. A pinned model obeys
 incompatible pin prints the blocked line naming the model and the reason, exits 3, and never selects a
 substitute. `--pin MODEL` returns MODEL and nothing else; `assign --pin MODEL` gives every node exactly
 MODEL; `lanes --pin MODEL` returns MODEL, then the rungs above MODEL's ladder position. The
-delegation-tiers plugin's pin_model chain is that same lanes list after MODEL. A failed model is never
-retried.
+delegation-tiers plugin's pin_model chain is that same lanes list after MODEL. A pin overrides the
+local tier floor: the lanes and plugin chains continue at every healthy fitting local rung above
+MODEL, then the paid rungs from the tier's paid floor; a paid pin continues at the paid rungs after
+MODEL in paid_ladder order. A failed model is never retried.
 Capabilities / model are in the ROUTING_FILE "features" map: features[model] = {vision, web, probed};
 --needs F requires every named feature true (a model with no entry has no features; `pick vision`
 means `--needs vision`). The blocked line reads features[haiku|sonnet|opus] through the same filter
@@ -451,16 +455,22 @@ def _entry_for(feats, model, fam=None):
 
 
 def tier_floor(cfg, tier):
-    """The rank the tier's local ladder starts at. tier_floor maps tier to its floor model id; the
-    legacy tiers[TIER].min_rank serves when the map names no model (a non-integer min_rank is
-    ignored). A missing or unknown tier takes the intern floor; no map and no min_rank means no
-    floor (0)."""
+    """The rank the tier's local ladder starts at. tier_floor maps tier to its floor model id and
+    wins when that model ranks; the legacy tiers[TIER].min_rank serves next for a known tier (a
+    non-integer min_rank is ignored); the intern floor serves last. A missing or unknown tier
+    (in neither map) takes the intern floor directly. No usable entry means no floor (0)."""
     tf = cfg.get("tier_floor") or {}
-    mid = tf.get(tier if tier in tf else "intern")
-    if mid is not None:
-        return cfg["rank"].get(mid, 0)
-    mr = (cfg.get("tiers") or {}).get(tier, {}).get("min_rank")
-    return mr if type(mr) is int else 0
+    rank = cfg.get("rank") or {}
+    tiers = cfg.get("tiers") or {}
+    if tier in tf or tier in tiers:
+        mid = tf.get(tier)
+        if mid in rank:
+            return rank[mid]
+        mr = (tiers.get(tier) or {}).get("min_rank")
+        if type(mr) is int:
+            return mr
+    intern = tf.get("intern")
+    return rank.get(intern, 0) if intern is not None else 0
 
 
 def paid_floor(cfg, tier):
@@ -472,13 +482,17 @@ def paid_floor(cfg, tier):
     return fams.index(fam) if fam in fams else 0
 
 
-def ladder(needs=None, failed=(), tier=None):
+def ladder(needs=None, failed=(), tier=None, pinned=None):
     """The escalation rungs for these needs and this tier, cheapest fitting first; one (provider,
     model, top effort) per rung, and the entry the delegation-tiers plugin imports alongside
     effective_effort(). Order: on-ladder healthy flatiron models whose features cover every need
     with a rank at or above the tier floor (tier_floor; a missing or unknown tier takes the intern
     floor), ascending rank, then the paid_ladder families at or after the tier's paid floor
-    (paid_floor) in list order at their latest ids. Need-wins: when no local model at or above the
+    (paid_floor) in list order at their latest ids. pinned: the routed pin of a `lanes --pin` or
+    plugin pin_model chain as (provider, model); a pin overrides the local tier floor, so the
+    local rungs start at the bottom and the caller keeps the ones above the pin, and a paid pin
+    also drops the paid floor, so the chain can continue at the paid rungs after the pin in
+    paid_ladder order. Need-wins: when no local model at or above the
     floor covers the needs, the local rungs start at the strongest fitting local model below the
     floor and go up from there; the paid floor never drops. The floor and the needs check coverage
     only: a failed or unhealthy floor model does not open the exception. A model
@@ -509,7 +523,7 @@ def ladder(needs=None, failed=(), tier=None):
         return effective_effort(model, cap) if cap else None
 
     on_ladder = lambda m: _entry_for(feats, m).get("ladder") is not False
-    floor = tier_floor(cfg, tier)
+    floor = 0 if pinned else tier_floor(cfg, tier)   # a pin overrides the local tier floor
     covers_above = [m for m in rank if rank[m] >= floor and on_ladder(m) and fits(m)]
     rungs = [m for m in sorted(rank, key=lambda m: rank[m])
              if on_ladder(m) and m not in failed and health.get(m, {}).get("ok") and fits(m)]
@@ -521,7 +535,9 @@ def ladder(needs=None, failed=(), tier=None):
         local = [max(below, key=lambda m: rank[m])] if below else []
     out = [("flatiron", m, top(m)) for m in local]
     latest = _latest_soft()
-    for fam in (cfg.get("paid_ladder", DEFAULT_ROUTING["paid_ladder"]))[paid_floor(cfg, tier):]:
+    # a paid pin continues at the paid rungs after it: the paid floor drops too, the caller cuts
+    pfrom = 0 if pinned and pinned[0] != "flatiron" else paid_floor(cfg, tier)
+    for fam in (cfg.get("paid_ladder", DEFAULT_ROUTING["paid_ladder"]))[pfrom:]:
         mid = latest.get(fam)
         if fam == "sol" or not mid or mid in failed:   # sol is the reviewer: never a rung
             continue
@@ -530,11 +546,12 @@ def ladder(needs=None, failed=(), tier=None):
     return out
 
 
-def _rungs(kind, tier, needs, failed, skipped):
+def _rungs(kind, tier, needs, failed, skipped, pinned=None):
     """The rungs pick, lanes and assign serve, in ladder order: ladder() with the tier floor
-    (tier_floor and paid_floor) and the kind's ledger demotion.
+    (tier_floor and paid_floor) and the kind's ledger demotion. pinned: a `lanes --pin` head
+    (provider, model); the pin overrides the local tier floor.
     When every rung is demoted the unskipped ladder is served: the demotion is advisory."""
-    rungs = list(ladder(needs, failed, tier))
+    rungs = list(ladder(needs, failed, tier, pinned))
     dead = _ledger_dead(kind)
 
     def walk(demote):
@@ -687,7 +704,8 @@ def lanes(kind, tier, failed, needs, pin=None):
         head = {"provider": p["provider"], "model": p["model"], "flags": p["flags"],
                 "rank": cfg["rank"].get(p["model"]), "reason": p["reason"]}
         pk = _ladder_key(cfg, p["provider"], p["model"])
-        up = [r for r in _rungs(kind, tier, needs, failed, sk)
+        # the pin overrides the local tier floor; a paid pin drops the paid floor too
+        up = [r for r in _rungs(kind, tier, needs, failed, sk, (p["provider"], p["model"]))
               if _ladder_key(cfg, r[0], r[1]) > pk]
         return [head] + [dict(_lane_entry(r, tcfg, cfg),
                               reason=f"up the ladder from pinned {p['model']}") for r in up]

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.3
+- Dispatch: a pin overrides the local tier floor. `lanes --pin MODEL` and the plugin `pin_model` chain continue at every healthy fitting local rung above MODEL, then the paid rungs from the tier's paid floor; a paid pin continues at the paid rungs after MODEL in `paid_ladder` order. `pick --pin` and `assign --pin` stay exactly MODEL.
+- Dispatch: the tier floor is `tier_floor[TIER]` first (its model must rank), then the legacy `tiers[TIER].min_rank`, then the intern floor; a missing or unknown tier takes the intern floor directly.
+
 ## 2.3.2
 - Dispatch: the pick follows the global rank map. Every task starts at the cheapest healthy local model with its needs and moves up the map, then to the paid ladder cheapest first. The kind and the tier set the filters and the effort, never the model.
 - Dispatch: `--pin` gives pick, assign and lanes exactly the pinned model; `lanes --pin` adds the rungs above it. A paid discovery failure keeps fitting local rungs usable and drops the paid rungs with one warning.
