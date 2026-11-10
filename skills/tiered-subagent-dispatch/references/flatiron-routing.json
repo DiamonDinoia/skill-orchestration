@@ -1,12 +1,24 @@
 {
- "_doc": "Manager-owned HINTS for ~/.local/bin/hermes-dispatch-route. The model set comes from the gateway's live /models listing; this file only orders it. rank = general strength (the escalation ladder serves the lowest rank first: cheapest local, then stronger local, then paid cheapest first). paid_ladder = the paid rung families in cheapest-first order, each at its latest id; gpt-6.1-sol and any family outside this list are never rungs (pin only). A flatiron model entry (features[model]) may carry \"ladder\": false and is then never a rung; a missing key means on the ladder. routes = per-kind hint order for sync placement. features[model] = {vision, web, probed}: probed capabilities; probed is the date of the last successful probe. The bare keys haiku/sonnet/opus describe the paid rungs. `pick KIND --needs f1,f2` keeps only models whose features entry has every named feature true (no entry = no capabilities); `pick vision` means `--needs vision`. A missing exact features entry falls back to the family entry; an exact entry, even empty, wins. sync probes features for new healthy listed models and ranks listed unranked models; entries for models the gateway no longer lists are ignored. floors maps kind to anchor model id. A new or returning model enters that kind only when at least as strong as the anchor. A missing floors entry closes code, debug, research or frontend to new models. prose and mechanical have no floor. An anchor out of the rank map closes that kind to new models. tiers[TIER].min_rank (optional) floors the ladder for that tier; a tier without it does not choose the model. features[model].max_effort (optional, one of low, medium, high, xhigh) caps the rung's reasoning effort at min(requested, max_effort); missing means no cap.",
+ "_doc": "Manager-owned HINTS for ~/.local/bin/hermes-dispatch-route. The model set comes from the gateway's live /models listing; this file only orders it. rank = general strength (the escalation ladder serves the lowest rank first: cheapest local, then stronger local, then paid cheapest first). tier_floor maps tier to the model id its ladder starts at; paid_floor maps tier to the paid_ladder family its paid rungs start at. A missing or unknown tier takes the intern floor and the first paid family. paid_ladder = the paid rung families in cheapest-first order, each at its latest id; gpt-6.1-sol and any family outside this list are never rungs (pin only). A flatiron model entry (features[model]) may carry \"ladder\": false and is then never a rung; a missing key means on the ladder. routes = per-kind hint order for sync placement. features[model] = {vision, web, probed}: probed capabilities; probed is the date of the last successful probe. The bare keys haiku/sonnet/opus describe the paid rungs. `pick KIND --needs f1,f2` keeps only models whose features entry has every named feature true (no entry = no capabilities); `pick vision` means `--needs vision`. A missing exact features entry falls back to the family entry; an exact entry, even empty, wins. sync probes features for new healthy listed models and ranks listed unranked models; entries for models the gateway no longer lists are ignored. floors maps kind to anchor model id. A new or returning model enters that kind only when at least as strong as the anchor. A missing floors entry closes code, debug, research or frontend to new models. prose and mechanical have no floor. An anchor out of the rank map closes that kind to new models. features[model].max_effort (optional, one of low, medium, high, xhigh) caps the rung's reasoning effort at min(requested, max_effort); missing means no cap.",
  "paid_ladder": ["haiku", "sonnet", "opus"],
  "rank": {
-  "XiaomiMiMo/MiMo-V2.6-Pro-MOPD": 6,
-  "zai-org/GLM-5.3": 5,
-  "moonshotai/Kimi-K3": 4,
   "Qwen/Qwen3.8-27B-FP8": 3,
+  "zai-org/GLM-5.3": 4,
+  "XiaomiMiMo/MiMo-V2.6-Pro-MOPD": 5,
+  "moonshotai/Kimi-K3": 6,
   "mistralai/Mistral-Medium-3.5-128B": 1
+ },
+ "tier_floor": {
+  "intern": "Qwen/Qwen3.8-27B-FP8",
+  "junior": "zai-org/GLM-5.3",
+  "senior": "XiaomiMiMo/MiMo-V2.6-Pro-MOPD",
+  "principal": "moonshotai/Kimi-K3"
+ },
+ "paid_floor": {
+  "intern": "haiku",
+  "junior": "haiku",
+  "senior": "sonnet",
+  "principal": "opus"
  },
  "routes": {
   "code": ["XiaomiMiMo/MiMo-V2.6-Pro-MOPD", "moonshotai/Kimi-K3", "zai-org/GLM-5.3", "Qwen/Qwen3.8-27B-FP8"],
@@ -25,6 +37,7 @@
  "features": {
   "moonshotai/Kimi-K3": {"vision": false, "web": false, "probed": "2026-10-26"},
   "XiaomiMiMo/MiMo-V2.6-Pro-MOPD": {"vision": false, "web": false, "probed": "2026-10-26"},
+  "mistralai/Mistral-Medium-3.5-128B": {"vision": false, "web": false, "ladder": false},
   "haiku": {"vision": true, "web": true, "probed": "2026-10-16"},
   "sonnet": {"vision": true, "web": true, "probed": "2026-10-16"},
   "opus": {"vision": true, "web": true, "probed": "2026-10-16"},

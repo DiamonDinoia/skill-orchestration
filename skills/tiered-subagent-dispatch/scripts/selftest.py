@@ -5,6 +5,9 @@ import contextlib, fcntl, importlib.machinery, importlib.util, io, json, os, sub
 from pathlib import Path
 
 BIN = Path.home() / ".local" / "bin"
+# Every check runs against an empty ledger: a path that never exists. The live outcomes ledger
+# demotes real model ids and would make a check depend on the host's run history.
+NO_LEDGER = "/nonexistent/hermes-selftest/ledger.jsonl"
 # Staged runs: HERMES_DISPATCH_BIN names a dir holding a candidate router; absent tools fall to BIN.
 STAGE = Path(os.environ.get("HERMES_DISPATCH_BIN") or BIN)
 
@@ -49,38 +52,52 @@ def check_route():
 
 
 def check_tiers():
-    """The tier sets the flags and never the model: every tier takes the same ladder rung. The
-    ladder serves paid rungs with no pin, and a failed rung never holds back a cheaper one."""
+    """The tier floors the ladder: the tier_floor model of a tier is its first rung and paid_floor
+    starts its paid rungs. A missing or unknown tier takes the intern floor. Need-wins: a need the
+    floor models lack starts at the strongest fitting local model below the floor. A failed floor
+    model gives the paid floor next. A ladder-false model is never a rung and stays pinnable."""
     r = load("hermes-dispatch-route")
     r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9", "haiku": "claude-haiku-9", "sol": "x"}
     cfg = json.loads(r.ROUTING_FILE.read_text())  # the real tier table, so a bad edit to it fails here
-    cfg["rank"], cfg["routes"] = {"a/Top": 4, "b/Mid": 3}, {"code": ["a/Top", "b/Mid"]}
-    cfg["features"] = {f: {"vision": True, "web": True} for f in ("haiku", "sonnet", "opus")}
+    tf = cfg["tier_floor"]                        # the real floor ids, tested here verbatim
+    QWEN, GLM, MIMO, KIMI = "Qwen/Qwen3.8-27B-FP8", "zai-org/GLM-5.3", "XiaomiMiMo/MiMo-V2.6-Pro-MOPD", "moonshotai/Kimi-K3"
+    assert tf == {"intern": QWEN, "junior": GLM, "senior": MIMO, "principal": KIMI}, tf
+    assert cfg["paid_floor"] == {"intern": "haiku", "junior": "haiku", "senior": "sonnet", "principal": "opus"}, cfg["paid_floor"]
+    MIST = "mistralai/Mistral-Medium-3.5-128B"
+    cfg["rank"] = {QWEN: 3, GLM: 4, MIMO: 5, KIMI: 6, MIST: 1}   # the shipped scale: qwen weakest
+    cfg["routes"] = {"code": [QWEN, GLM, MIMO, KIMI]}
+    cfg["features"] = {m: {"vision": False, "web": False} for m in cfg["rank"]}
+    cfg["features"][QWEN] = {"vision": True, "web": False}       # only qwen fits vision below every floor
+    cfg["features"][MIST] = {"vision": False, "web": False, "ladder": False}
     cfg["paid_ladder"] = ["haiku", "sonnet", "opus"]
     r.routing = lambda: cfg
     def health(**ok):
         r.flatiron_status = lambda *a: {m.replace("_", "/"): {"ok": v} for m, v in ok.items()}
-    pick = lambda kind="code", tier="senior", failed=(), pin=None: r.pick(kind, tier, list(failed), False, pin=pin)
-    health(a_Top=False, b_Mid=False)                                                     # all flatiron down
-    for tier in ("intern", "junior", "senior", "principal"):
-        assert pick(tier=tier)["model"] == "claude-haiku-9", tier                         # every tier takes the same rung
-    assert pick(tier="junior", failed=["claude-haiku-9"])["model"] == "claude-sonnet-9"
-    assert pick(tier="principal", failed=["claude-opus-9"])["model"] == "claude-haiku-9"   # no monotonic floor: only skips
-    assert pick("vision", tier="principal")["model"] == "claude-haiku-9"                  # vision keeps the same ladder
-    health(a_Top=True, b_Mid=True)
+    paid = ["claude-haiku-9", "claude-sonnet-9", "claude-opus-9"]
+    lanes = lambda tier, failed=(), needs=(): [x["model"] for x in r.lanes("code", tier, list(failed), list(needs))]
+    names = lambda tier: [m for _p, m, _t in r.ladder([], [], tier)]
+    pick = lambda kind="code", tier="senior", failed=(), pin=None, needs=(): r.pick(kind, tier, list(failed), False, list(needs), pin)
+    health(**{QWEN: True, GLM: True, MIMO: True, KIMI: True, MIST: True})          # every local healthy
+    assert lanes("intern") == [QWEN, GLM, MIMO, KIMI] + paid, lanes("intern")            # floor = weakest local
+    assert names(None) == names("intern"), "a missing tier takes the intern floor"
+    assert names("lead") == names("intern"), "an unknown tier takes the intern floor"
+    assert lanes("junior") == [GLM, MIMO, KIMI] + paid, lanes("junior")                  # junior starts at GLM
+    assert lanes("senior") == [MIMO, KIMI] + paid[1:], lanes("senior")                   # senior starts at MiMo
+    assert lanes("principal") == [KIMI] + paid[2:], lanes("principal")                   # principal starts at Kimi
+    assert MIST not in str(lanes("intern")) + str(lanes("principal")), "ladder false is never a rung"
+    assert lanes("senior", needs=["vision"]) == [QWEN] + paid[1:], "need-wins drops below the floor"
+    assert lanes("senior", failed=[MIMO, KIMI]) == paid[1:], "a failed floor gives the paid floor next"
+    assert lanes("principal", failed=[KIMI]) == paid[2:], "principal paid floor is opus"
+    assert lanes("intern", failed=[QWEN, GLM, MIMO, KIMI]) == paid, "every local failed -> intern paid floor"
+    assert pick(tier="principal", pin=MIST)["model"] == MIST, "a ladder-false model stays pinnable"
     f = pick(tier="principal")["flags"]                                                   # flatiron pick: effort and skills
     assert "--reasoning high" in f and "-s brainstorm -s team -s manager" in f, f
     f = pick(tier="intern")["flags"]
     assert "-s " not in f and "--reasoning low" in f, f
-    assert pick(tier="principal")["model"] == pick(tier="intern")["model"] == "b/Mid"     # the tier never moves the ladder
-    health(a_Top=False, b_Mid=False)
+    health(**{QWEN: False, GLM: False, MIMO: False, KIMI: False, MIST: False})    # all flatiron down
+    assert lanes("intern") == paid and lanes("senior") == paid[1:] and lanes("principal") == paid[2:]
     f = pick(tier="principal", pin="opus")["flags"]                                       # explicit pin: skills, no effort
     assert "--reasoning" not in f and "-s manager" in f, f
-    health(a_Top=True)                                                                    # Kimi-like model has no vision entry
-    assert pick("vision")["model"] == "claude-haiku-9"                                    # no local vision rung -> paid
-    assert pick("vision", pin="haiku")["model"] == "claude-haiku-9"                       # the explicit pin returns the paid rung
-    cfg["features"]["a/Top"] = {"vision": True, "web": False}
-    assert pick("vision")["model"] == "a/Top"                                             # image-capable flatiron rung leads
 
 
 def check_effort_clamp():
@@ -95,17 +112,18 @@ def check_effort_clamp():
     r.routing = lambda: cfg
     r.inflight_counts = lambda: {}
 
-    def efforts_of(model, tier):
+    def efforts_of(model, tier, pin=False):
         cfg["rank"], cfg["routes"] = {model: 5}, {"code": [model]}
         r.flatiron_status = lambda *a: {model: {"ok": True}}
-        outs = [r.pick("code", tier, [], False), r.lanes("code", tier, [], [])[0],
-                r.assign([("n1", "code", tier, [])])[0]]
+        p = model if pin else None          # a ladder-false model runs only as a pin
+        outs = [r.pick("code", tier, [], False, pin=p), r.lanes("code", tier, [], [], p)[0],
+                r.assign([("n1", "code", tier, [])], p)[0]]
         return [o["flags"].split("--reasoning ", 1)[1].split()[0] for o in outs]
 
     assert efforts_of(QWEN, "senior") == ["medium"] * 3               # high -> medium
     assert efforts_of(QWEN, "principal") == ["medium"] * 3            # principal high -> medium
-    assert efforts_of(MIST, "intern") == ["none"] * 3                 # low -> none
-    assert efforts_of(MIST, "principal") == ["high"] * 3              # principal high -> high
+    assert efforts_of(MIST, "intern", pin=True) == ["none"] * 3       # low -> none (pin only: ladder false)
+    assert efforts_of(MIST, "principal", pin=True) == ["high"] * 3    # principal high -> high
     jv = cfg["tiers"]["junior"]["reasoning_effort"]                    # the json value, not a live pin
     assert efforts_of("n/Unlisted", "junior") == [jv] * 3              # no entry: the tier value stays
 
@@ -163,6 +181,8 @@ def check_lanes():
                        "haiku": {"vision": True, "web": True}, "sonnet": {"vision": True, "web": True},
                        "opus": {"vision": True, "web": True}}
     cfg["paid_ladder"] = ["haiku", "sonnet", "opus"]
+    cfg["tier_floor"] = {t: "e/Down" for t in ("intern", "junior", "senior", "principal")}   # every floor at the weakest
+    cfg["paid_floor"] = {t: "haiku" for t in ("intern", "junior", "senior", "principal")}
     r.routing = lambda: cfg
     def health(**ok):
         r.flatiron_status = lambda *a: {m.replace("_", "/"): {"ok": v} for m, v in ok.items()}
@@ -183,7 +203,10 @@ def check_lanes():
     health(a_Top=True, b_Mid=True, c_Lo=True, d_NoVis=True, e_Down=False)
     assert [x["model"] for x in lanes(needs=["vision"])] == ["b/Mid", "a/Top"] + paid, "vision need must drop c/Lo and d/NoVis"
     assert [x["model"] for x in lanes(kind="vision")] == ["b/Mid", "a/Top"] + paid, "kind vision == --needs vision"
-    assert [x["model"] for x in lanes(tier="principal")] == [x["model"] for x in lanes(tier="intern")], "the tier does not choose"
+    assert [x["model"] for x in lanes(tier="principal")] == [x["model"] for x in lanes(tier="intern")], "equal floors give equal rungs"
+    cfg["tier_floor"]["principal"] = "b/Mid"                                        # the floor picks the first rung
+    assert [x["model"] for x in lanes(tier="principal")] == ["b/Mid", "a/Top"] + paid, lanes(tier="principal")
+    cfg["tier_floor"]["principal"] = "e/Down"
     f = lanes(tier="principal")[0]["flags"]                                         # the tier's effort and skills, like pick's
     assert "--reasoning high" in f and "-s brainstorm -s team -s manager" in f, f
     health(a_Top=False, b_Mid=False, c_Lo=False, d_NoVis=False, e_Down=False)      # all flatiron down
@@ -682,8 +705,8 @@ def check_sync_config_fail():
 
 
 def check_tier_min_rank():
-    """A tier floors the ladder only when the routing table defines tiers[TIER].min_rank. Without
-    the key the tier does not choose the model."""
+    """The legacy tiers[TIER].min_rank is the tier floor when tier_floor names no model for the
+    tier: only rungs at or above it serve. A non-integer value is ignored."""
     r = load("hermes-dispatch-route")
     r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9",
                                    "haiku": "claude-haiku-9", "sol": "x"}
@@ -696,7 +719,6 @@ def check_tier_min_rank():
     assert [x["model"] for x in r.lanes("code", "senior", [], [])] == ["a/Strong"]     # only rungs at or above rank 4
     got = r.pick("code", "senior", [], False)
     assert got["model"] == "a/Strong", got
-    assert any(s.startswith("c/Weak: below tier min rank 4") for s in got["skipped"]), got["skipped"]
     assert [x["model"] for x in r.lanes("code", "intern", [], [])] == ["c/Weak", "b/Mid", "a/Strong"]  # no key: whole ladder
     cfg["tiers"]["senior"]["min_rank"] = "four"                                       # a bad value is ignored
     assert [x["model"] for x in r.lanes("code", "senior", [], [])] == ["c/Weak", "b/Mid", "a/Strong"]
@@ -1100,13 +1122,14 @@ def check_assign_capacity_inflight():
 
 
 def check_ladder_order():
-    """The ladder order is ascending rank, then the paid rungs, and no tier moves it. The retired
-    prefer key is gone from the shipped tier table, and a model outside the rank map is no rung."""
+    """The ladder order is ascending rank, then the paid rungs. A routing table with no tier_floor
+    gives every tier the same rungs. The retired prefer key is gone from the shipped tier table,
+    and a model outside the rank map is no rung."""
     r = load("hermes-dispatch-route")
     r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9", "haiku": "claude-haiku-9", "sol": "x"}
     tiers = json.loads(r.ROUTING_FILE.read_text())["tiers"]                       # the real tier table
     assert all("prefer" not in t for t in tiers.values()), tiers                   # the tier no longer chooses
-    assert all("min_rank" not in t for t in tiers.values()), tiers                 # no tier floors by default
+    assert all("min_rank" not in t for t in tiers.values()), tiers                 # the floors live in tier_floor
     cfg = {"rank": {"s/Strong": 5, "m/Mid": 4, "c/Cheap": 2, "d/Down": 1}, "tiers": tiers,
            "routes": {"code": ["s/Strong", "m/Mid", "c/Cheap", "d/Down"], "mechanical": ["s/Strong", "c/Cheap", "m/Mid"]},
            "paid_ladder": [], "features": {}}
@@ -1393,7 +1416,7 @@ def check_ledger_demotes():
         assert any(s.startswith(kimi) and s.endswith("ledger: last 3 mechanical runs failed")
                    for s in p["skipped"]), p["skipped"]
         assert [x["model"] for x in r.lanes("mechanical", "senior", [], [])] == [mist, qwen]   # lanes obeys the demotion
-    os.environ.pop("HERMES_DISPATCH_LEDGER", None)
+    os.environ["HERMES_DISPATCH_LEDGER"] = NO_LEDGER
 
 
 def check_ledger_mixed_verdicts():
@@ -1407,7 +1430,7 @@ def check_ledger_mixed_verdicts():
         p = r.pick("mechanical", "senior", [], False)
         assert p["model"] == kimi, p
         assert not any("ledger" in s for s in p["skipped"]), p["skipped"]
-    os.environ.pop("HERMES_DISPATCH_LEDGER", None)
+    os.environ["HERMES_DISPATCH_LEDGER"] = NO_LEDGER
 
 
 def check_ledger_bad_lines():
@@ -1426,7 +1449,7 @@ def check_ledger_bad_lines():
         p = r.pick("mechanical", "senior", [], False)
         assert p["model"] == mist, p                                         # the 3 bad rows still demote kimi
         assert [x["model"] for x in r.lanes("mechanical", "senior", [], [])] == [mist, qwen], p
-    os.environ.pop("HERMES_DISPATCH_LEDGER", None)
+    os.environ["HERMES_DISPATCH_LEDGER"] = NO_LEDGER
 
 
 def check_ledger_all_skipped():
@@ -1444,7 +1467,7 @@ def check_ledger_all_skipped():
         assert p["model"] == kimi, p                                         # demotion is advisory when every rung is dead
         assert "ledger fallback" in p["reason"] and "unskipped order" in p["reason"], p
         assert any("serving the unskipped order" in s for s in p["skipped"]), p["skipped"]
-    os.environ.pop("HERMES_DISPATCH_LEDGER", None)
+    os.environ["HERMES_DISPATCH_LEDGER"] = NO_LEDGER
 
 
 def check_effort_at_most_high():
@@ -1473,7 +1496,7 @@ def check_ledger_fallback_note_lanes_assign():
             assert note in x.get("reason", ""), x
         a = r.assign([("n1", "mechanical", "senior", [])])[0]
         assert note in a["reason"], a
-    os.environ.pop("HERMES_DISPATCH_LEDGER", None)
+    os.environ["HERMES_DISPATCH_LEDGER"] = NO_LEDGER
 
 
 def check_norm_model_size_suffix():
@@ -1571,7 +1594,7 @@ def check_fallback_missing_id():
         assert "haiku" in msg, msg
         got = r.pick("code", "intern", [], False, pin="claude-opus-9")
         assert (got["provider"], got["model"]) == (r.CLAUDE, "claude-opus-9"), got   # the named id runs
-    os.environ.pop("HERMES_DISPATCH_LEDGER", None)
+    os.environ["HERMES_DISPATCH_LEDGER"] = NO_LEDGER
 
 
 def check_routing_null_list():
@@ -1900,6 +1923,7 @@ def check_pin_contract_pick_assign_lanes():
 
 
 if __name__ == "__main__":
+    os.environ["HERMES_DISPATCH_LEDGER"] = NO_LEDGER   # the live ledger never touches a check
     check_route(); check_tiers(); check_effort_clamp(); check_effort_round_down(); check_effort_unknown_names(); check_lanes(); check_needs(); check_default_features()
     check_probe_fallback()
     check_sync_features(); check_sync_rank(); check_sync_rank_gates()

@@ -14,7 +14,7 @@ The routing and config rules below are Hermes only. For children that run in ano
 
 ## Quota and provider rules
 
-- Quota rule. Every task starts on the cheapest healthy flatiron model that has its needs. On an API failure the chain moves to the next stronger healthy flatiron model within one dispatch. After the strongest fitting flatiron model fails, the chain moves to paid models cheapest first: haiku, sonnet, opus. The report flags every paid landing. `pin_model` jumps the chain to a named model and continues up from it. `gpt-6.1-sol` is the final reviewer and never a ladder rung. A `pin_provider` that names a paid provider without `pin_model` is refused.
+- Quota rule. The manager picks a tier for every task and its floor is the first model. On an API failure the chain moves up the ladder inside one dispatch. Past Kimi-K3 the chain moves to the paid ladder at the tier's paid floor, cheapest first: haiku, sonnet, opus (senior starts at sonnet, principal at opus). The report flags every paid landing. `pin_model` jumps the chain to a named model and continues up from it. Mistral is pin-only. `gpt-6.1-sol` is the final reviewer and never a ladder rung. A `pin_provider` that names a paid provider without `pin_model` is refused.
 - Provider fence. Every brief names its provider fence, for example "flatiron only; on any other provider stop and report". The first report line must satisfy the fence before work counts. See the report first line rule.
 
 ## Harness notes
@@ -25,7 +25,7 @@ The routing and config rules below are Hermes only. For children that run in ano
 
 ## Tiers and routing
 
-The manager names a tier per deliverable. The tier sets the reasoning effort and the extra skills. The escalation ladder picks the model. Tier names, never model names, go in a brief.
+The manager names a tier per deliverable. The tier floors the ladder and sets the reasoning effort and the extra skills. The escalation ladder picks the model. Tier names, never model names, go in a brief.
 
 | Tier | Reasoning effort | Extra skills |
 |------|------------------|--------------|
@@ -39,7 +39,7 @@ Rules that hold:
 - An untiered task routes to intern. The delegation-tiers plugin sets this default.
 - Reasoning effort tops out at high. Max runs only when the user asks for it.
 - A per-model effort override lives in the top-level `efforts` map of `references/flatiron-routing.json`, keyed by model. `sync` writes it from the rejection text. `pick` and `assign` clamp to it. A child that gets a refusal line reports the line and the effort it sent, and the manager reroutes the deliverable. A model's `features` entry may carry `max_effort`; each rung runs at the lower of the requested effort and that cap. Qwen3.8 is capped at medium because it rejects high.
-- Flatiron first. Every task starts on the cheapest healthy flatiron model that has its needs. On failure the chain moves to the next stronger flatiron model, then to paid models cheapest first. The report flags every paid landing. Fable is excluded unless the user allows it for one named deliverable.
+- Flatiron first. Every task starts at its tier's floor model that has its needs. On an API failure the chain moves up the ladder inside one dispatch, then to the paid models at the tier's paid floor, cheapest first. The report flags every paid landing. Fable is excluded unless the user allows it for one named deliverable.
 - Eligibility is a hard filter. A flatiron model is a ladder rung only when it is healthy and it passes `--needs`. The kind does not select the model. The `routes` lists and the `floors` key order `sync` placement of new models. A missing anchor entry fails closed. Mechanics: `references/routing-mechanics.md`.
 - Spread parallel work over the whole eligible set. `assign` places each node on the eligible model with the fewest in-flight jobs. No model has a job cap. Never split one node for show.
 - The model set comes from the gateway. A routing child runs `hermes-dispatch-route models` and `sync`. See `references/routing-mechanics.md`. Never hand-set a literal model id.
@@ -61,11 +61,13 @@ A `delegate_task` task takes three optional fields. The tier still sets the reas
 
 ## Ladder (per deliverable)
 
-1. Cheapest healthy flatiron model that has the task's needs. A routing child runs `hermes-dispatch-route pick <kind> [--tier <tier>]`. The kinds are code, debug, frontend, research, prose, mechanical and vision. It returns `{provider, model, flags, reason, skipped}`. The tier sets the effort and the skills, never the model.
-2. On an API failure the chain moves to the next stronger healthy flatiron model within one dispatch. A routing child reruns `pick` with `--failed <every model that failed so far>`.
-3. After the strongest fitting flatiron model fails, the chain moves to paid models cheapest first: haiku, sonnet, opus. The report flags every paid landing. Blocked only when no model fits.
+The manager picks a tier for every task and its floor is the first model. An API failure moves up the ladder inside one dispatch. A failed check makes the manager rerun the deliverable one tier up. Past Kimi-K3 the paid ladder starts at the tier's paid floor, and the report flags each paid landing. Mistral is pin-only.
 
-Escalate only the failing deliverables. A routing child resolves "latest" ids live with `hermes-dispatch-route latest`, only for a model the user named. A `vision` pick keeps only models with `features` vision true. In-process `delegate_task` children use `pin_model`, or the first fit of the ladder, or `delegation.provider/model`. `sync` sets it to the ladder head, the cheapest healthy local model, paid only when no local model is healthy. A fully empty ladder keeps the pinned flatiron default and the children fail over through the `fallback_providers` chain. A mid-session model request of the user changes only new dispatches.
+1. The tier's floor model that has the task's needs. A routing child runs `hermes-dispatch-route pick <kind> [--tier <tier>]`. The kinds are code, debug, frontend, research, prose, mechanical and vision. It returns `{provider, model, flags, reason, skipped}`. The tier floors the ladder and sets the effort and the skills. When no model at or above the floor has the needs, the rung is the strongest fitting local model below the floor.
+2. On an API failure the chain moves to the next stronger healthy flatiron model within one dispatch. A routing child reruns `pick` with `--failed <every model that failed so far>`.
+3. Past the local rungs the chain moves to the paid models of the tier's paid floor, cheapest first: haiku for intern and junior, sonnet for senior, opus for principal. The report flags every paid landing. Blocked only when no model fits.
+
+Escalate only the failing deliverables. A routing child resolves "latest" ids live with `hermes-dispatch-route latest`, only for a model the user named. A `vision` pick keeps only models with `features` vision true. In-process `delegate_task` children use `pin_model`, or the first fit of the ladder, or `delegation.provider/model`. `sync` sets it to the ladder head: the intern floor model when it is healthy, paid only when no local model is healthy. A fully empty ladder keeps the pinned flatiron default and the children fail over through the `fallback_providers` chain. A mid-session model request of the user changes only new dispatches.
 
 ## Outcome ledger
 

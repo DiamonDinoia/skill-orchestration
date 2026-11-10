@@ -32,7 +32,7 @@ A numeric claim that stays identical before and after the reported edit fails ar
 
 ## Dispatch waves
 
-Each dispatch wave names the tier and the quota class of every lane in the report. Every task starts on the cheapest local (flatiron) model that has its needs. On failure it moves to the next stronger local model, then to paid models cheapest first: haiku, sonnet, opus. The report flags every paid landing. Blocked only when no model fits.
+Each dispatch wave names the tier and the quota class of every lane in the report. The manager picks a tier for every task and its floor is the first model. On an API failure the chain moves up the ladder inside one dispatch, then to the paid models at the tier's paid floor, cheapest first: haiku, sonnet, opus. The report flags every paid landing. Blocked only when no model fits.
 
 ## UI deliverables
 
