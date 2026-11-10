@@ -14,7 +14,7 @@ Detail behind the tier and ladder rules in SKILL.md. Load before changing `refer
 - `models [--refresh]` lists every gateway model with health, rank hint, kinds and new flags.
 - `sync [--refresh]` writes discovered ids into the Hermes config.
 
-KIND is code, debug, frontend, research, prose, mechanical or vision. TIER is intern, junior, senior or principal. A flatiron `pick` takes `--reasoning EFFORT`, clamped to the accepted values below. `-s SKILL` adds one tier skill to the flags of every pick. `--needs FEATURE` keeps only a model whose `features` entry has every named feature true. A model with no entry has no capabilities, and `pick vision` means `--needs vision`.
+KIND is code, debug, frontend, research, prose, mechanical or vision. TIER is intern, junior, senior, principal or super. A flatiron `pick` takes `--reasoning EFFORT`, clamped to the accepted values below. `-s SKILL` adds one tier skill to the flags of every pick. `--needs FEATURE` keeps only a model whose `features` entry has every named feature true. A model with no entry has no capabilities, and `pick vision` means `--needs vision`.
 
 ## Effort clamp
 
@@ -39,9 +39,9 @@ A flatiron model is a ladder rung only when it is healthy and it passes `--needs
 
 ## `pick` and `lanes`
 
-- `pick` probes the gateway (60 s cache; `--refresh` forces) and returns the first eligible lane.
-- The tier floors the ladder and sets the effort and the skills. `tier_floor` maps tier to the floor model id (intern Qwen3.8, junior GLM-5.3, senior MiMo, principal Kimi-K3), `paid_floor` maps tier to the paid family its paid rungs start at (intern and junior haiku, senior sonnet, principal opus). A missing or unknown tier takes the intern floor and haiku. The tier floor is `tier_floor[TIER]` first (its model must rank), then the legacy `tiers[TIER].min_rank`, then the intern floor. A `principal` tier pick is not the top rank. When the user asks for the top-ranked model instead, take it from the rank map, where a higher rank value means stronger. Never pick by `routes` list order, which encodes a preference, not strength.
-- `pick KIND --tier TIER` returns the tier's floor model that has the task's needs. The pick order is the `rank` map of `references/flatiron-routing.json`, lowest rank first, from the tier floor up. When no model at or above the floor has the needs, the pick is the strongest fitting local model below the floor and the order goes up from there. Past the local rungs the order moves to the `paid_ladder` key at the tier's `paid_floor`, cheapest first. `--pin MODEL` returns MODEL. `lanes --pin MODEL` returns MODEL and the rungs above it; a pin overrides the local tier floor, and a paid pin continues at the paid rungs after MODEL in `paid_ladder`. `assign --pin MODEL` returns MODEL for every node.
+- `pick` probes the gateway (60 s cache; `--refresh` forces) and returns the first eligible lane. Health and the served list are at most 60 s old at each dispatch. A recovered model rejoins with no edit.
+- The tier floors the ladder and sets the effort and the skills. `tier_floor` maps tier to the floor model id (intern and junior Qwen3.8, senior and principal MiMo, super none). `paid_floor` maps tier to the paid family its paid rungs start at (intern and junior haiku, senior sonnet, principal and super opus). A null tier floor means no local rung, so that ladder starts at the paid floor. A missing or unknown tier takes the intern floor and haiku. The tier floor is `tier_floor[TIER]` first (its model must rank), then the legacy `tiers[TIER].min_rank`, then the intern floor. A `principal` tier pick is not the top rank. When the user asks for the top-ranked model instead, take it from the rank map, where a higher rank value means stronger. Never pick by `routes` list order, which encodes a preference, not strength.
+- `pick KIND --tier TIER` returns the tier's floor model that has the task's needs. The pick order is the `rank` map of `references/flatiron-routing.json`, lowest rank first, from the tier floor up. When no healthy local model at or above the tier floor fits the needs, the local rungs move below the floor. The local rungs start at the strongest healthy local model there. Past the local rungs the order moves to the `paid_ladder` key at the tier's `paid_floor`, cheapest first. `--pin MODEL` returns MODEL. `lanes --pin MODEL` returns MODEL and the rungs above it. A pin overrides the local tier floor. A paid pin continues at the paid rungs after MODEL in `paid_ladder`. `assign --pin MODEL` returns MODEL for every node.
 - `--failed` moves the pick to the next stronger healthy model on the ladder. Past the local ladder the pick moves to the `paid_ladder` key at the tier's paid floor, cheapest first. It prints one `blocked:` line with the available models and exits 3 only when no model fits. A paid model runs when the ladder moves to it. It also runs when the caller names it through `--pin MODEL` (delegate_task: `pin_model`), the family haiku|sonnet|opus|sol or an exact id. An exact id resolves to its provider against every model the routing file knows and every paid-family id, not only the latest per family. An unknown id is an error and exits non-zero; a pin never falls through to flatiron. A malformed caller id (`--pin` or `--failed`: whitespace, an argument suffix, a leading `-`, or a metadata key like `_doc`) exits non-zero and returns nothing: an id is one token of `[A-Za-z0-9./_-]`. The `--needs` check of a pin reads the exact `features` entry when the routing file has one, even when it is empty; the family entry applies only when the exact key is absent. A pinned model obeys `--failed` and `--needs`: an incompatible pin prints the `blocked:` line naming the model and the reason, exits 3, and never selects a substitute. The report flags every paid landing. Mistral carries `"ladder": false` and is pin-only.
 - `lanes` lists every eligible flatiron lane. No free fit prints the same `blocked:` line and exits 3.
 
@@ -63,6 +63,17 @@ A flatiron model is a ladder rung only when it is healthy and it passes `--needs
 ## User route override
 
 The user can override the default dispatch route for one task. Resolve the exact name and any context variant once with `latest <family>`. Launch the task's later children as background `hermes chat` processes with `--yolo`, `--max-turns` and a query-file brief, with the resolved model pinned.
+
+## Per-tier ladders, cap and ledger
+
+The strength order is Qwen < GLM < MiMo < Kimi-K3 < Haiku < Sonnet < Opus. GLM sits between Qwen and MiMo only while flatiron serves it.
+
+- intern and junior: Qwen, MiMo, Kimi-K3, then haiku, sonnet, opus.
+- senior: MiMo, Kimi-K3, then sonnet, opus.
+- principal: a MiMo team of 3, a Kimi-K3 team of 3, then one Opus child.
+- super: an Opus team of 3 with no local rung. It runs only after principal fails.
+- No child runs on a model stronger than the manager's own model. The same model is allowed. A pin above the cap returns the `blocked:` line. A capped ladder that runs out returns `blocked` and never climbs past the cap. Sol is exempt as the final reviewer and never writes code.
+- The ledger drop counts only rows whose verdict is exactly `failed`. The verdicts `missed-defects`, `blocked`, `interrupted`, `hung` and `fabricated` never count.
 
 ## Routing ship's gate
 

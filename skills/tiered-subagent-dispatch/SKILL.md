@@ -14,7 +14,7 @@ The routing and config rules below are Hermes only. For children that run in ano
 
 ## Quota and provider rules
 
-- Quota rule. The manager picks a tier for every task and its floor is the first model. The tier floor is `tier_floor[TIER]` first (its model must rank), then the legacy `tiers[TIER].min_rank`, then the intern floor. On an API failure the chain moves up the ladder inside one dispatch. Past Kimi-K3 the chain moves to the paid ladder at the tier's paid floor, cheapest first: haiku, sonnet, opus (senior starts at sonnet, principal at opus). The report flags every paid landing. `pin_model` jumps the chain to a named model, overrides the local tier floor and continues up from it; a paid pin continues at the paid rungs after it in `paid_ladder`. Mistral is pin-only. `gpt-6.1-sol` is the final reviewer and never a ladder rung. A `pin_provider` that names a paid provider without `pin_model` is refused.
+- Quota rule. The manager picks a tier for every task and its floor is the first model. The tier floor is `tier_floor[TIER]` first (its model must rank), then the legacy `tiers[TIER].min_rank`, then the intern floor. On an API failure the chain moves up the ladder inside one dispatch. Past Kimi-K3 the chain moves to the paid ladder at the tier's paid floor, cheapest first: haiku, sonnet, opus. Senior starts at sonnet. Principal and super start at opus. The report flags every paid landing. `pin_model` jumps the chain to a named model. It overrides the local tier floor and continues up from it. A paid pin continues at the paid rungs after it in `paid_ladder`. Mistral is pin-only. `gpt-6.1-sol` is the final reviewer and never a ladder rung. A `pin_provider` that names a paid provider without `pin_model` is refused.
 - Provider fence. Every brief names its provider fence, for example "flatiron only; on any other provider stop and report". The first report line must satisfy the fence before work counts. See the report first line rule.
 
 ## Harness notes
@@ -32,7 +32,8 @@ The manager names a tier per deliverable. The tier floors the ladder and sets th
 | intern | low | none |
 | junior | high | none |
 | senior | high | brainstorm |
-| principal | high | brainstorm, team, manager |
+| principal | high | brainstorm, agent-comms, team, manager |
+| super | high | brainstorm, agent-comms |
 
 Rules that hold:
 
@@ -44,6 +45,7 @@ Rules that hold:
 - Spread parallel work over the whole eligible set. `assign` places each node on the eligible model with the fewest in-flight jobs. No model has a job cap. Never split one node for show.
 - The model set comes from the gateway. A routing child runs `hermes-dispatch-route models` and `sync`. See `references/routing-mechanics.md`. Never hand-set a literal model id.
 - Smoke tests and one-line checks run on the picked flatiron model, never on the default provider. `claude -p` and `codex exec` only when the check tests that tool's own config.
+- Model cap. No child runs on a model stronger than the manager's own model. The same model is allowed. A pin above the cap returns `blocked`, and a capped ladder that runs out returns `blocked` to the manager. Sol is exempt as the final reviewer and never writes code.
 
 ## Per-task routing fields
 
@@ -63,16 +65,26 @@ A `delegate_task` task takes three optional fields. The tier still sets the reas
 
 The manager picks a tier for every task and its floor is the first model. The tier floor is `tier_floor[TIER]` first (its model must rank), then the legacy `tiers[TIER].min_rank`, then the intern floor. A pin overrides the local tier floor; a paid pin continues at the paid rungs after it in `paid_ladder`. An API failure moves up the ladder inside one dispatch. A failed check makes the manager rerun the deliverable one tier up. Past Kimi-K3 the paid ladder starts at the tier's paid floor, and the report flags each paid landing. Mistral is pin-only.
 
-1. The tier's floor model that has the task's needs. The tier floor is `tier_floor[TIER]` first, then the legacy `tiers[TIER].min_rank`, then the intern floor. A routing child runs `hermes-dispatch-route pick <kind> [--tier <tier>]`. The kinds are code, debug, frontend, research, prose, mechanical and vision. It returns `{provider, model, flags, reason, skipped}`. The tier floors the ladder and sets the effort and the skills. When no model at or above the floor has the needs, the rung is the strongest fitting local model below the floor.
+1. The tier's floor model that has the task's needs. The tier floor is `tier_floor[TIER]` first (its model must rank), then the legacy `tiers[TIER].min_rank`, then the intern floor. A routing child runs `hermes-dispatch-route pick <kind> [--tier <tier>]`. The kinds are code, debug, frontend, research, prose, mechanical and vision. It returns `{provider, model, flags, reason, skipped}`. The tier floors the ladder and sets the effort and the skills. When no healthy local model at or above the tier floor fits the needs, the local rungs move below the floor. The local rungs start at the strongest healthy local model there.
 2. On an API failure the chain moves to the next stronger healthy flatiron model within one dispatch. A routing child reruns `pick` with `--failed <every model that failed so far>`.
-3. Past the local rungs the chain moves to the paid models of the tier's paid floor, cheapest first: haiku for intern and junior, sonnet for senior, opus for principal. The report flags every paid landing. Blocked only when no model fits.
+3. Past the local rungs the chain moves to the paid models of the tier's paid floor, cheapest first. Haiku covers intern and junior. Sonnet covers senior. Opus covers principal and super. The report flags every paid landing. Blocked only when no model fits.
+
+The per-tier ladders use one strength order: Qwen < GLM < MiMo < Kimi-K3 < Haiku < Sonnet < Opus. GLM sits between Qwen and MiMo only while flatiron serves it.
+
+- intern: Qwen, MiMo, Kimi-K3, then haiku, sonnet, opus.
+- junior: Qwen, MiMo, Kimi-K3, then haiku, sonnet, opus.
+- senior: MiMo, Kimi-K3, then sonnet, opus.
+- principal: a MiMo team, a Kimi-K3 team, then one Opus child.
+- super: an Opus team with no local rung. It runs only after principal fails.
+
+Each dispatch reads the served list and health no older than 60 s. A recovered model rejoins with no edit. A new served id joins only after `sync` ranks it.
 
 Escalate only the failing deliverables. A routing child resolves "latest" ids live with `hermes-dispatch-route latest`, only for a model the user named. A `vision` pick keeps only models with `features` vision true. In-process `delegate_task` children use `pin_model`, or the first fit of the ladder, or `delegation.provider/model`. `sync` sets it to the ladder head: the intern floor model when it is healthy, paid only when no local model is healthy. A fully empty ladder keeps the pinned flatiron default and the children fail over through the `fallback_providers` chain. A mid-session model request of the user changes only new dispatches.
 
 ## Outcome ledger
 
 - The bookkeeping intern child alone appends one row per child outcome to `~/.hermes/cache/dispatch-route/outcomes.jsonl`. It appends on the manager's order. Fields: `ts`, `node`, `kind`, `tier`, `model`, `verdict`, `note`. The bookkeeping intern child of a child-manager writes rows for its own leaves to the same ledger. A leaf child does not write the ledger.
-- Before each batch a routing child reads the ledger tail and adds a leaders-per-kind summary to each brief. `pick`, `lanes` and `assign` skip a model for a kind when its last 3 rows for that kind all have a bad verdict. A bad verdict is `hung`, `fabricated`, `missed-defects` or a verdict that starts with `failed`. A hyphenated verdict counts as its stem.
+- Before each batch a routing child reads the ledger tail and adds a leaders-per-kind summary to each brief. `pick`, `lanes` and `assign` skip a model for a kind when its last 3 rows for that kind all have verdict `failed`. Only a verdict that is exactly `failed` counts toward the drop. The verdicts `missed-defects`, `blocked`, `interrupted`, `hung` and `fabricated` never count.
 - The ledger is per-host cache. Never commit it. Rotate it at 10k rows.
 
 ## Procedure

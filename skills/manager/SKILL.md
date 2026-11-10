@@ -78,8 +78,13 @@ A screenshot or image verdict goes to the cheapest binding model that reads imag
 | `junior` | Well-specified implementation. No API or architecture decisions. |
 | `senior` | Implementation with judgment calls. Code review. |
 | `principal` | Numerics, SIMD, concurrency, performance, unclosed debugging, open-ended design. |
+| `super` | An Opus team with brainstorm and agent-comms. Only after principal fails. |
 
-An untiered dispatch defaults to `intern`, the default starting tier. `junior` is for well-specified implementation. `senior` and above is for review work or after a junior failure. Hard on sight goes to `principal`. Escalate one tier per failed check, crash or stall. A mechanical check or a doc edit that starts at `senior` or `principal` is a dispatch defect. Any tier escalates ambiguity with `[ESCALATE-TO-MANAGER] <problem> <options> <recommendation>`. The child writes that line in its report. The manager answers at the next turn.
+An untiered dispatch defaults to `intern`, the default starting tier. `junior` is for well-specified implementation. `senior` and above is for review work or after a junior failure. Hard on sight goes to `principal`. Escalate one tier per failed check, crash or stall. A principal leaf runs a team of 3 per local rung with brainstorm and agent-comms, then one Opus child. No child runs on a model stronger than the manager's own model. Sol is exempt as final reviewer only. A mechanical check or a doc edit that starts at `senior` or `principal` is a dispatch defect. Any tier escalates ambiguity with `[ESCALATE-TO-MANAGER] <problem> <options> <recommendation>`. The child writes that line in its report. The manager answers at the next turn.
+
+## Team dispatch
+
+A team is 3 children on one ladder rung. `lanes` and `assign` mark a team rung with a `team_size` field of 3. Each child drafts a plan alone. The team agrees on one plan over the bus with the brainstorm protocol. One named child writes and the others review. Only the writer edits files. The team climbs one rung only when its agreed result fails the check, or when it reaches no agreement by its deadline. Each child brief carries the agent-comms Bus clause with a shared wave id and the sibling list.
 
 ## Divide and conquer
 
@@ -89,7 +94,7 @@ Split work recursively until each node carries one concern, one file set and one
 
 The review node is Sol (T5). A principal-tier review runs only when the user asks for it.
 
-If a leaf does not succeed, run `dag.py fail GRAPH ID`, then `dag.py escalate GRAPH ID`. Send the node again at the new tier. Escalate also resets the node's done or failed transitive dependents to todo, the same reset that `retry` does. A `principal` leaf that does not succeed goes to the parent manager.
+If a leaf does not succeed, run `dag.py fail GRAPH ID`, then `dag.py escalate GRAPH ID`. Send the node again at the new tier. Escalate also resets the node's done or failed transitive dependents to todo, the same reset that `retry` does. A `super` leaf that does not succeed goes to the parent manager.
 
 The bookkeeping intern child writes one row for each child outcome to `~/.hermes/cache/dispatch-route/outcomes.jsonl`. It writes on the manager's order, in the same call as the dag.py state change. Each JSONL row has the fields `ts`, `node`, `kind`, `tier`, `model`, `verdict` and `note`. An `interrupted` or `blocked` verdict is not a `failed` verdict. `HERMES_DISPATCH_LEDGER` overrides the ledger path.
 
@@ -101,7 +106,7 @@ The manager names the skills each deliverable needs. A missing one goes in an in
 
 A child on a quota-free model may get the `team` and `brainstorm` skills and spawn children up to the harness depth limit. A paid-quota child never spawns children. Every level obeys the same tier, brief and report rules. A child that cannot ask the user escalates user-question steps to its parent. A team run inside a child keeps the team skill's not-supported sentence. Assign `team` only to a child that can still spawn. Otherwise split the work into leaf deliverables.
 
-The ladder moves to a paid model only after the strongest fitting flatiron model fails, cheapest first: haiku, sonnet, opus. A paid charge that the ladder did not justify is a dispatch defect. The user sees it directly in usage. Dispatch every wave to the cheapest tier that can do the job. The report flags every paid landing. The rule covers wait-and-relay children as hard as workers. A waiting child still bills its own model each turn it is woken. The pin check on the first report line applies to launchers too.
+The ladder moves to a paid model only after the strongest fitting flatiron model fails, cheapest first: haiku, sonnet, opus. A paid charge that the ladder did not justify is a dispatch defect. The user sees it directly in usage. Dispatch every wave to the cheapest tier that can do the job. Every paid run and every super run is flagged in the report. The rule covers wait-and-relay children as hard as workers. A waiting child still bills its own model each turn it is woken. The pin check on the first report line applies to launchers too.
 
 ## Parallel
 
@@ -125,7 +130,7 @@ Before dispatch, write each deliverable as a node of a graph file in the scratch
 
 The bookkeeping child runs `python3 scripts/dag.py check GRAPH`, with the path relative to this skill. Exit 1 means an invalid graph. Fix the split, not the check. Exit 2 means a usage or filesystem error. Fix the path, permissions or call and rerun. Tell the user if it persists.
 
-Each node has an optional `tier` field: `intern`, `junior`, `senior` or `principal`. A node without one is `intern`. `dag.py check` rejects a bad value with `node X: invalid tier Y`.
+Each node has an optional `tier` field: `intern`, `junior`, `senior`, `principal` or `super`. A node without one is `intern`. `dag.py check` rejects a bad value with `node X: invalid tier Y`.
 
 Keep the graph as wide as the work allows:
 
