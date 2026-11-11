@@ -2,7 +2,7 @@
 name: brainstorm
 description: Use when the user says "brainstorm", "help me decide" or "think this through", or brings a vague design intent. Conversation-only; output is a decision log.
 license: MIT
-version: 2.3.4
+version: 2.3.5
 ---
 
 # Brainstorm

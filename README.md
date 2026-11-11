@@ -65,13 +65,12 @@ the name check. It also runs `skills/parallel/scripts/waves.py --selftest` from 
 test/run.sh   # podman, or: test/run.sh docker
 ```
 
-## Version 2.3.4
+## Version 2.3.5
 
-The manager runs no commands itself; every command routes to a child and waits go to the intern
-tier. Small models serve the junior and intern tiers by default: the intern tier takes the
-cheapest mechanical lane and the junior tier the cheapest code lane, pinned by
-`Qwen/Qwen3.8-27B-FP8` in `flatiron-routing.json`. `dag.py` defaults an untiered node to intern.
-`CHANGELOG.md` lists every change.
+A web search or web fetch step runs on a Haiku child, and the `sync` ranker is the one documented
+exception: one Haiku child both searches and ranks. After a PASS the run pushes the branch and
+fast-forwards the default branch to the branch tip, with no pull request. `CHANGELOG.md` lists
+every change.
 
 ## License
 

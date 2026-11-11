@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.3.5
+- Rules: a web search or web fetch step runs on a Haiku child. The child writes verbatim excerpts with their URLs to a scratch file and does no analysis. A flatiron child reads that file and does the analysis.
+- Dispatch: the `sync` ranker runs on the resolved Haiku id. It is the one documented exception to the web research split: one Haiku child both searches and ranks. With no live Haiku id the ranker does not run.
+- Landing: after a PASS the run pushes the branch, makes its CI green, then fast-forwards the default branch to the branch tip. No pull request. The branch is deleted after the default-branch CI is green.
+- Docs: `tests/test_docs.py` pins the ranker exception sentence in the Web research split bullet.
+- Version fields are 2.3.5 in every manifest and skill.
+
 ## 2.3.4
 - Dispatch: `tier_floor` and `paid_floor` set each tier's local floor and paid floor. A null local floor starts the ladder at the paid floor.
 - Dispatch: when no healthy local model at or above the tier floor fits, the local rungs start at the strongest healthy local model below it.

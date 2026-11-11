@@ -2,7 +2,7 @@
   "name": "orchestration",
   "displayName": "Orchestration",
   "description": "Persistent manager role with tiered dispatch (intern/junior/senior/principal) and a hard context budget.",
-  "version": "2.3.4",
+  "version": "2.3.5",
   "author": {
     "name": "Marco Barbone",
     "url": "https://github.com/DiamonDinoia"
