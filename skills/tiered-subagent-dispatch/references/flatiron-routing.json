@@ -37,6 +37,7 @@
   "research": "moonshotai/Kimi-K3"
  },
  "features": {
+  "zai-org/GLM-5.3": {"vision": false, "web": false},
   "moonshotai/Kimi-K3": {"vision": false, "web": false, "probed": "2026-10-26"},
   "XiaomiMiMo/MiMo-V2.6-Pro-MOPD": {"vision": false, "web": false, "probed": "2026-10-26"},
   "mistralai/Mistral-Medium-3.5-128B": {"vision": false, "web": false, "ladder": false},
@@ -56,7 +57,7 @@
   "intern": {"reasoning_effort": "low", "skills": [], "fallback": ["haiku", "sonnet"]},
   "junior": {"reasoning_effort": "high", "skills": [], "fallback": ["haiku", "sonnet", "opus"]},
   "senior": {"reasoning_effort": "high", "skills": ["brainstorm"], "fallback": ["sonnet", "opus"]},
-  "principal": {"reasoning_effort": "high", "skills": ["brainstorm", "team", "manager"], "fallback": ["opus"]},
+  "principal": {"reasoning_effort": "high", "skills": ["brainstorm", "agent-comms", "team", "manager"], "fallback": ["opus"]},
   "super": {"reasoning_effort": "high", "skills": ["brainstorm", "agent-comms"], "fallback": ["opus"]}
  }
 }

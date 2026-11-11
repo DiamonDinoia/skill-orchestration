@@ -3,11 +3,17 @@
 ## 2.3.4
 - Dispatch: `tier_floor` and `paid_floor` set each tier's local floor and paid floor. A null local floor starts the ladder at the paid floor.
 - Dispatch: when no healthy local model at or above the tier floor fits, the local rungs start at the strongest healthy local model below it.
-- Dispatch: only the ledger verdict `failed` counts toward the 3-strike drop. The verdicts missed-defects, blocked, interrupted, hung and fabricated never count.
+- Dispatch: only the ledger verdict `failed` counts toward the drop. The verdicts missed-defects, blocked and interrupted never count.
 - Dispatch: the router drops every rung stronger than the caller model. A pin above the cap and an exhausted capped ladder return blocked. Sol is exempt as a reviewer.
 - Tiers: `super` is an Opus team and runs only after principal fails. `dag.py` escalates a failed principal node to super.
 - Teams: principal and super run as teams of 3 children, marked by `team_size` in `lanes` and `assign`. The manager skill holds the dispatch rule.
 - Health: when the 60 s probe sees the served list change, the router ranks the new ids at once. `lanes` and `assign` gain `--refresh`.
+- Dispatch: the ledger drop reads the last 3 counted rows of one kind, not a lifetime count. A later success clears the drop.
+- Dispatch: auto-sync diagnostics go to stderr; the stdout of `pick`, `lanes` and `assign` holds only the JSON result.
+- Dispatch: discovery and auto-sync run before the ladder reads the routing config, so one dispatch sees a newly ranked model.
+- Health: a new model joins the rank map only after its features probe succeeds. A failed probe leaves it out and retries next cycle; the selftest rejects a rank with no features entry.
+- Dispatch: the caller cap compares paid families in the one strength order Qwen < GLM < MiMo < Kimi-K3 < Haiku < Sonnet < Opus, never in the enabled `paid_ladder` order.
+- Tiers: principal carries skills brainstorm, agent-comms, team and manager. The SKILL.md and routing-mechanics.md tables and the built-in defaults match the data.
 - Documented limits: core `ROUTE_KEYS` drops the plugin's `team_size` route key. Team dispatch is a manager rule driven by router `lanes` and `assign` output, so `team_size` there is what matters.
 - Version fields are 2.3.4 in every manifest and skill.
 

@@ -96,7 +96,7 @@ def check_tiers():
     assert lanes("intern", failed=[QWEN, GLM, MIMO, KIMI]) == paid, "every local failed -> intern paid floor"
     assert pick(tier="principal", pin=MIST)["model"] == MIST, "a ladder-false model stays pinnable"
     f = pick(tier="principal")["flags"]                                                   # flatiron pick: effort and skills
-    assert "--reasoning high" in f and "-s brainstorm -s team -s manager" in f, f
+    assert "--reasoning high" in f and "-s brainstorm -s agent-comms -s team -s manager" in f, f
     f = pick(tier="intern")["flags"]
     assert "-s " not in f and "--reasoning low" in f, f
     f = pick(tier="super")["flags"]                                                       # super: opus team, no effort
@@ -215,7 +215,7 @@ def check_lanes():
     assert [x["model"] for x in lanes(tier="principal")] == ["b/Mid", "a/Top"] + paid, lanes(tier="principal")
     cfg["tier_floor"]["principal"] = "e/Down"
     f = lanes(tier="principal")[0]["flags"]                                         # the tier's effort and skills, like pick's
-    assert "--reasoning high" in f and "-s brainstorm -s team -s manager" in f, f
+    assert "--reasoning high" in f and "-s brainstorm -s agent-comms -s team -s manager" in f, f
     health(a_Top=False, b_Mid=False, c_Lo=False, d_NoVis=False, e_Down=False)      # all flatiron down
     assert [x["model"] for x in lanes()] == paid, lanes()                           # the paid rungs serve
     got = pick()
@@ -344,7 +344,7 @@ def check_sync_features():
 
         r._vision_probe = edit_and_probe
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             r.sync_features({**health, "e/New2": {"ok": True}}, listed + ["e/New2"])
         assert "routing json changed during sync, not published" in buf.getvalue(), buf.getvalue()
         assert json.loads(rj.read_text()) == edi, "the mid-run edit must not be overwritten"
@@ -354,7 +354,8 @@ def check_sync_rank():
     r = load("hermes-dispatch-route")
     with tempfile.TemporaryDirectory() as d:
         rj = Path(d, "routing.json")
-        base = {"rank": {"a/Top": 2, "b/Mid": 1}, "routes": {}, "features": {"a/Top": {"vision": True, "web": True}}, "tiers": {}}
+        base = {"rank": {"a/Top": 2, "b/Mid": 1}, "routes": {},
+                "features": {"a/Top": {"vision": True, "web": True}, "n/New": {"vision": False, "web": False}, "x/Z": {"vision": False, "web": False}, "w/New": {"vision": False, "web": False}}, "tiers": {}}
         rj.write_text(json.dumps(base))
         r.ROUTING_FILE = rj
         side = Path(d, "cache", "dispatch-route")   # the real shape: sidecars off the json dir
@@ -412,7 +413,7 @@ def check_sync_rank():
         (side / (rj.name + ".last-listed")).write_text(json.dumps({"r/Gone": "2020-01-01", "a/Top": "2020-01-01"}))
         r._selftest_ok = lambda *_: False
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             r.sync_rank(latest, health, ["a/Top", "b/Mid", "n/New"])
         assert "r/Gone" in json.loads(rj.read_text())["rank"], "a rejected publish must not drop the model"
         kept = json.loads((side / (rj.name + ".last-listed")).read_text())
@@ -434,7 +435,7 @@ def check_sync_rank():
         r._run_ranker = rank_edit
         nbackup = len(list(side.glob(rj.name + ".20??-??-??*")))
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             r.sync_rank(latest, health, ["a/Top", "b/Mid", "n/New", "w/New"])
         assert "routing json changed during sync, not published" in buf.getvalue(), buf.getvalue()
         assert json.loads(rj.read_text()) == edi, "the mid-run edit must not be overwritten"
@@ -448,7 +449,8 @@ def check_sync_rank_gates():
         sub = Path(d, "sub"); (sub / "refs").mkdir(parents=True); (sub / "scripts").mkdir()
         (sub / "scripts" / "selftest.py").write_text("")    # gate path must exist for the timeout below
         rj = sub / "refs" / "routing.json"
-        raw = json.dumps({"rank": {"a/Top": 2, "b/Mid": 1}, "routes": {}, "features": {}, "tiers": {}}) + "\n"
+        raw = json.dumps({"rank": {"a/Top": 2, "b/Mid": 1}, "routes": {},
+                                  "features": {"n/New": {"vision": False, "web": False}, "y/New2": {"vision": False, "web": False}, "z/New3": {"vision": False, "web": False}}, "tiers": {}}) + "\n"
         rj.write_text(raw)
         r.ROUTING_FILE = rj
         side = Path(d, "cache", "dispatch-route")   # the real shape: sidecars off the json dir
@@ -515,7 +517,8 @@ def check_sync_rank_gate_crash():
     r = load("hermes-dispatch-route")
     with tempfile.TemporaryDirectory() as d:
         rj = Path(d, "routing.json")
-        raw = json.dumps({"rank": {"a/Top": 2, "b/Mid": 1}, "routes": {}, "features": {}, "tiers": {}}) + "\n"
+        raw = json.dumps({"rank": {"a/Top": 2, "b/Mid": 1}, "routes": {},
+                                  "features": {"n/New": {"vision": False, "web": False}}, "tiers": {}}) + "\n"
         rj.write_text(raw)
         r.ROUTING_FILE = rj
         side = Path(d, "cache", "dispatch-route")   # the real shape: sidecars off the json dir
@@ -547,7 +550,8 @@ def check_sync_rank_budget():
     r = load("hermes-dispatch-route")
     with tempfile.TemporaryDirectory() as d:
         rj = Path(d, "routing.json")
-        raw = json.dumps({"rank": {"a/Top": 2, "b/Mid": 1}, "routes": {}, "features": {}, "tiers": {}}) + "\n"
+        raw = json.dumps({"rank": {"a/Top": 2, "b/Mid": 1}, "routes": {},
+                                  "features": {"n/New": {"vision": False, "web": False}, "y/New2": {"vision": False, "web": False}}, "tiers": {}}) + "\n"
         rj.write_text(raw)
         r.ROUTING_FILE = rj
         side = Path(d, "cache", "dispatch-route")   # the real shape: sidecars off the json dir
@@ -598,7 +602,7 @@ def check_sync_rank_budget():
         state.write_text(json.dumps({"models": ["n/New"], "attempts": "x"}))
         calls.clear()
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             r.sync_rank(latest, health, lst)
         assert "ranker-rejects: malformed, reset" in buf.getvalue(), buf.getvalue()
         assert len(calls) == 1 and json.loads(state.read_text()) == {"models": ["n/New"], "attempts": 1}, calls
@@ -654,7 +658,7 @@ def check_sync_config_fail():
         r.subprocess.run = run_factory(lambda k: ns(0, f"OLD-{k}", ""), {"delegation.model"})
         log.clear()
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             assert r.sync(False) == 1
         assert [x[1] for x in log][:4] == ["delegation.fallback_providers", "delegation.tiers",
                                            "delegation.provider", "delegation.model"], log
@@ -704,7 +708,7 @@ def check_sync_config_fail():
         r.subprocess.run = run_store
         log.clear()
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             assert r.sync(False) == 1
         assert store == oldvals, store        # all keys old again, the failing one included
         assert "restored delegation.model" in buf.getvalue(), buf.getvalue()
@@ -765,7 +769,8 @@ def check_sync_rank_reasons():
     r = load("hermes-dispatch-route")
     with tempfile.TemporaryDirectory() as d:
         rj = Path(d, "routing.json")
-        rj.write_text(json.dumps({"rank": {"a/Top": 2, "b/Mid": 1}, "routes": {}, "features": {}, "tiers": {}}))
+        feats = {m: {"vision": False, "web": False} for m in ("n/New", "y/New2", "z/New3", "w/New4")}
+        rj.write_text(json.dumps({"rank": {"a/Top": 2, "b/Mid": 1}, "routes": {}, "features": feats, "tiers": {}}))
         r.ROUTING_FILE = rj
         side = Path(d, "cache", "dispatch-route")   # the real shape: sidecars off the json dir
         r.SIDECAR_DIR = side
@@ -777,7 +782,7 @@ def check_sync_rank_reasons():
         r._run_ranker = lambda *a, **k: {"order": {"a/Top": 3, "b/Mid": 1, "n/New": 2},
                                          "reasons": {"a/Top": "top bench score", "n/New": "new but strong"}}
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             r.sync_rank(latest, health, ["a/Top", "b/Mid", "n/New"])
         log = buf.getvalue()
         assert "top bench score" in log and "new but strong" in log, log
@@ -785,7 +790,7 @@ def check_sync_rank_reasons():
         # an order-only reply still validates and the log says there were no reasons
         r._run_ranker = lambda *a, **k: {"order": {"a/Top": 4, "b/Mid": 1, "n/New": 2, "y/New2": 3}}
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             r.sync_rank(latest, health, ["a/Top", "b/Mid", "n/New", "y/New2"])
         assert "no reasons" in buf.getvalue(), buf.getvalue()
         assert json.loads(rj.read_text())["rank"]["y/New2"] == 3
@@ -793,7 +798,7 @@ def check_sync_rank_reasons():
         r._run_ranker = lambda *a, **k: {"order": {"a/Top": 5, "b/Mid": 1, "n/New": 2, "y/New2": 3, "z/New3": 4},
                                          "reasons": "talk"}
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             r.sync_rank(latest, health, ["a/Top", "b/Mid", "n/New", "y/New2", "z/New3"])
         assert "no reasons" in buf.getvalue() and json.loads(rj.read_text())["rank"]["z/New3"] == 4
 
@@ -803,7 +808,7 @@ def check_sync_rank_reasons():
                                          "reasons": {"n/New": "ok \ud800 tail",
                                                      "y/New2": "x\nrank: ACCEPTED fake line\n" + "y" * 300}}
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             r.sync_rank(latest, health, ["a/Top", "b/Mid", "n/New", "y/New2", "z/New3", "w/New4"])
         lines = buf.getvalue().splitlines()
         assert json.loads(rj.read_text())["rank"]["w/New4"] == 5, lines          # the order still lands
@@ -837,6 +842,7 @@ def check_sync_rank_routes():
         latest = {"opus": "claude-opus-9"}
         def sync(cfg, listed, order, ok=True):
             """One sync_rank with a stubbed ranker (order None = no usable reply). File bytes."""
+            cfg.setdefault("features", {}).update({m: {"vision": False, "web": False} for m in listed})   # the probes succeeded
             rj.write_text(json.dumps(cfg) + "\n")
             side.mkdir(parents=True, exist_ok=True)
             (side / (rj.name + ".ranker-rejects")).unlink(missing_ok=True)
@@ -867,7 +873,7 @@ def check_sync_rank_routes():
         cfg = staged(b_rank, b_routes)
         cfg.pop("floors")
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             _, raw = sync(cfg, list(b_rank) + ["n/Below"], {MIMO: 6, GLM: 5, K3: 4, QWEN: 3, MIST: 2, "n/Below": 1})
         got = json.loads(raw)
         for kind in ("code", "debug", "research", "frontend"):
@@ -883,7 +889,7 @@ def check_sync_rank_routes():
         cfg = staged(b_rank, b_routes)
         cfg["floors"]["code"] = "n/Gone"
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             _, raw = sync(cfg, list(b_rank) + ["n/Above"], {MIMO: 5, GLM: 4, K3: 3, QWEN: 2, MIST: 1, "n/Above": 6})
         got = json.loads(raw)
         for kind, lst in b_routes.items():
@@ -974,7 +980,7 @@ def check_sync_rank_routes():
         counted = []
         r._count_reject = lambda *a, **k: counted.append(a)   # spy: the reject counter must not move
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             before, after = sync(cfg, list(b_rank) + ["n/Above"],
                                  {MIMO: 5, GLM: 4, K3: 3, QWEN: 2, MIST: 1, "n/Above": 6})
         assert not counted, f"a placement crash must not burn a ranker retry: {counted}"
@@ -1194,7 +1200,7 @@ def check_sync_tier_models():
             return types.SimpleNamespace(stdout="ok", stderr="", returncode=0)
         r.subprocess = types.SimpleNamespace(run=run, TimeoutExpired=subprocess.TimeoutExpired, CalledProcessError=subprocess.CalledProcessError)
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             assert r.sync(False) == 0
         t = store["delegation.tiers"]
         claude = "claude-subscription-directsdk-experimental"
@@ -1206,10 +1212,10 @@ def check_sync_tier_models():
             assert "model" not in t[tier] and "provider" not in t[tier], t[tier]    # no tier pins a model
             assert t[tier]["fallback"] == chain, t[tier]                            # every tier carries the ladder tail
         assert t["intern"]["reasoning_effort"] == "low", t["intern"]
-        assert t["principal"]["skills"] == ["brainstorm", "team", "manager"], t["principal"]
+        assert t["principal"]["skills"] == ["brainstorm", "agent-comms", "team", "manager"], t["principal"]
         assert r.ROUTING_FILE.read_text() == routing_before            # sync keeps the routing file
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             assert r.sync(False) == 0
         assert "config already current" in buf.getvalue(), buf.getvalue()           # second run: no rewrite
         cfg["rank"]["c/Cheap"] = 9                                                  # the ladder head moves up
@@ -1259,7 +1265,7 @@ def check_sync_fallback_chain():
               "claude-haiku-9": {"ok": True}, "claude-sonnet-9": {"ok": True},
               "claude-opus-9": {"ok": True}, "gpt-5.2-sol": {"ok": True}}
     store = _sync_fake_config(r, cfg, health, list(cfg["rank"]))
-    with contextlib.redirect_stdout(io.StringIO()):
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         assert r.sync(False) == 0
     claude = "claude-subscription-directsdk-experimental"
     chain = [{"provider": "flatiron", "model": "s/Strong"}] + [{"provider": claude, "model": m}
@@ -1279,7 +1285,7 @@ def check_sync_fallback_single_model():
     cfg = {"rank": {"a/Only": 1}, "tiers": tiers,
            "routes": {"code": ["a/Only"], "mechanical": ["a/Only"]}, "features": {}}
     store = _sync_fake_config(r, cfg, {"a/Only": {"ok": True}}, ["a/Only"])
-    with contextlib.redirect_stdout(io.StringIO()):
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         assert r.sync(False) == 0
     claude = "claude-subscription-directsdk-experimental"
     chain = [{"provider": claude, "model": m} for m in ("claude-haiku-9", "claude-sonnet-9", "claude-opus-9")]
@@ -1303,7 +1309,7 @@ def check_sync_fallback_user_kept():
            "features": {}}
     health = {"s/Strong": {"ok": True}, "m/Mid": {"ok": True}, "c/Cheap": {"ok": True}}
     store = _sync_fake_config(r, cfg, health, list(cfg["rank"]))
-    with contextlib.redirect_stdout(io.StringIO()):
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         assert r.sync(False) == 0                                   # round one writes and stamps the chains
     claude = "claude-subscription-directsdk-experimental"
     round1 = [{"provider": "flatiron", "model": "m/Mid"}, {"provider": "flatiron", "model": "s/Strong"}] \
@@ -1313,7 +1319,7 @@ def check_sync_fallback_user_kept():
     store["delegation.fallback_providers"] = [{"provider": "anthropic", "model": "claude-haiku-5-5"}]
     store["delegation.tiers"]["senior"]["fallback"] = [{"provider": "openai", "model": "gpt-5.4"}]
     health["m/Mid"]["ok"] = False                                   # the new ladder drops m/Mid
-    with contextlib.redirect_stdout(io.StringIO()):
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         assert r.sync(False) == 0
     chain = [{"provider": "flatiron", "model": "s/Strong"}] + [{"provider": claude, "model": m}
              for m in ("claude-haiku-9", "claude-sonnet-9", "claude-opus-9")]
@@ -2090,7 +2096,7 @@ def check_new_id_sync():
             ranked.append((provider, model, sorted(listed)))
             return {"order": {"a/One": 2, "n/New": 1}}
         r._run_ranker = fake_ranker
-        with contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             r.flatiron_status(True)                       # the probe sees the unranked served id
         assert ranked and ranked[0][2] == ["a/One", "n/New"], ranked
         cfg = json.loads(rj.read_text())
@@ -2120,6 +2126,183 @@ def check_recovered_model():
         assert rj.read_text() == before, "a recovery needs no routing edit"
 
 
+def check_ledger_window():
+    """M1: the drop needs the last 3 counted rows of one kind to be exactly 'failed', not a
+    lifetime count. Rows with verdict missed-defects, blocked or interrupted are ignored; every
+    other verdict sits in the window and stops the drop. A later success clears the drop."""
+    r, qwen, mist, kimi = _ledger_case()
+    with tempfile.TemporaryDirectory() as d:
+        led = Path(d, "outcomes.jsonl")
+        os.environ["HERMES_DISPATCH_LEDGER"] = str(led)
+
+        def rows(verdicts):
+            led.write_text("".join(json.dumps(_ledger_row(i, kimi, v)) + "\n" for i, v in enumerate(verdicts)))
+
+        rows(["failed", "done-clean"] * 3)        # alternating failures and successes never demote
+        assert r.pick("mechanical", "senior", [], False)["model"] == kimi
+        rows(["failed", "missed-defects", "failed", "blocked", "failed", "interrupted"])
+        assert r.pick("mechanical", "senior", [], False)["model"] == mist   # ignored rows leave 3 failed
+        rows(["failed", "failed", "failed", "done-clean"])
+        assert r.pick("mechanical", "senior", [], False)["model"] == kimi   # a later success clears the drop
+        rows(["failed", "failed", "hung"])
+        assert r.pick("mechanical", "senior", [], False)["model"] == kimi   # hung is not ignored: it sits in the window
+        rows(["failed", "failed", "failed", "missed-defects"])
+        assert r.pick("mechanical", "senior", [], False)["model"] == mist   # an ignored row never clears the drop
+    os.environ["HERMES_DISPATCH_LEDGER"] = NO_LEDGER
+
+
+def _run_cli(r, args):
+    """One router CLI run on the in-memory router: (stdout, stderr)."""
+    out, err = io.StringIO(), io.StringIO()
+    previous = sys.argv
+    sys.argv = ["hermes-dispatch-route"] + args
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            r.main()
+    finally:
+        sys.argv = previous
+    return out.getvalue(), err.getvalue()
+
+
+def check_sync_stdout_json():
+    """M2: auto-sync diagnostics go to stderr. pick, lanes and assign stdout parses as JSON while
+    a sync runs: a failed features probe and a rejected ranker attempt name themselves on stderr."""
+    with tempfile.TemporaryDirectory() as d:
+        r, _rj, _down = _probe_world(d, {"a/One": 2}, ["a/One", "n/New"])
+        r.probe_features = lambda m: None
+        r._selftest_ok = lambda *_: True
+        r._run_ranker = lambda *a, **k: {"a/One": 2, "n/New": 1}
+        out, err = _run_cli(r, ["lanes", "code", "--tier", "intern"])
+        json.loads(out)                                             # stdout holds only the JSON result
+        assert "features:" in err, err
+        out, _err = _run_cli(r, ["pick", "code", "--tier", "intern"])
+        json.loads(out)
+        out, _err = _run_cli(r, ["assign", "n1=code:intern"])
+        json.loads(out)
+    with tempfile.TemporaryDirectory() as d:
+        r, _rj, _down = _probe_world(d, {"a/One": 2}, ["a/One", "m/Bad"])
+        r.probe_features = lambda m: {"vision": False, "web": False, "probed": "2026-11-10"}
+        r._selftest_ok = lambda *_: True
+        r._run_ranker = lambda *a, **k: None                        # a rejected ranking attempt
+        out, err = _run_cli(r, ["lanes", "code", "--tier", "intern"])
+        json.loads(out)
+        assert "attempt" in err, err
+
+
+def check_ladder_fresh_routing():
+    """M3: discovery and auto-sync run before ladder() reads the rank map and config, so the same
+    dispatch sees the newly ranked model. No separate health preflight."""
+    with tempfile.TemporaryDirectory() as d:
+        r, rj, _down = _probe_world(d, {"a/One": 2}, ["a/One", "n/New"])
+        r.probe_features = lambda m: {"vision": False, "web": False, "probed": "2026-11-10"}
+        r._selftest_ok = lambda *_: True
+        r._run_ranker = lambda *a, **k: {"a/One": 2, "n/New": 1}
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            first = [m for _p, m, _t in r.ladder([], [], "intern")]
+        assert first == ["n/New", "a/One"], first
+        assert json.loads(rj.read_text())["rank"]["n/New"] == 1
+
+
+def _features_gaps(cfg):
+    """Ranked ids with no features entry: D7 allows no rank before a successful features probe."""
+    return sorted(m for m in (cfg.get("rank") or {}) if m not in (cfg.get("features") or {}))
+
+
+def check_ranked_features():
+    """D7: every ranked id carries a features entry. The gate judges the routing file the router
+    reads, so the selftest on a sync candidate rejects a rank without one."""
+    r = load("hermes-dispatch-route")
+    cfg = json.loads(r.ROUTING_FILE.read_text())
+    assert not _features_gaps(cfg), f"ranked ids with no features entry: {_features_gaps(cfg)}"
+
+
+def check_features_probe_gate():
+    """M4: a new model joins the rank map only after its features probe succeeds. A failed probe
+    leaves the id out of the rank map and out of the ladder, and the next probe cycle retries it."""
+    assert _features_gaps({"rank": {"a/One": 2, "x/Unprobed": 7},
+                           "features": {"a/One": {"vision": False, "web": False}}}) == ["x/Unprobed"]
+    with tempfile.TemporaryDirectory() as d:
+        r, rj, _down = _probe_world(d, {"a/One": 2}, ["a/One", "n/New"])
+        r.probe_features = lambda m: None                           # the features probe fails
+        r._selftest_ok = lambda *_: True
+        ranker = []
+        r._run_ranker = lambda *a, **k: ranker.append(a) or {"a/One": 2, "n/New": 1}
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            r.flatiron_status(True)
+        cfg = json.loads(rj.read_text())
+        assert "n/New" not in cfg["rank"] and "n/New" not in (cfg.get("features") or {}), cfg
+        assert ranker == [], "an unprobed new id must not reach the ranker"
+        assert [m for _p, m, _t in r.ladder([], [], "intern")] == ["a/One"]
+        r.probe_features = lambda m: {"vision": False, "web": False, "probed": "2026-11-10"}
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            r.flatiron_status(True)                                 # the next probe cycle retries
+        cfg = json.loads(rj.read_text())
+        assert cfg["rank"]["n/New"] == 1 and cfg["features"]["n/New"], cfg
+        assert [m for _p, m, _t in r.ladder([], [], "intern")] == ["n/New", "a/One"]
+
+
+def check_caller_cap_paid_strength():
+    """M5: the caller cap compares paid families in the one strength order Qwen < GLM < MiMo <
+    Kimi-K3 < Haiku < Sonnet < Opus, never in the enabled paid_ladder order. A Haiku caller gets no
+    Sonnet or Opus and a Sonnet caller gets no Opus, even when paid_ladder omits their families."""
+    MIMO = "XiaomiMiMo/MiMo-V2.6-Pro-MOPD"
+    r = load("hermes-dispatch-route")
+    r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9",
+                                   "haiku": "claude-haiku-9", "sol": "gpt-9-sol"}
+    cfg = {"rank": {QWEN: 3, MIMO: 5}, "routes": {"code": [QWEN, MIMO]},
+           "paid_ladder": ["sonnet", "opus"],                       # haiku holds no enabled rung
+           "tier_floor": {"intern": QWEN}, "paid_floor": {"intern": "sonnet"},
+           "tiers": {"intern": {"reasoning_effort": "low"}}, "features": {}}
+    r.routing = lambda: cfg
+    r.flatiron_status = lambda *a: {m: {"ok": True} for m in cfg["rank"]}
+    lanes = lambda caller: [x["model"] for x in r.lanes("code", "intern", [], [], None, False, caller)]
+    assert lanes("claude-haiku-9") == [QWEN, MIMO], lanes("claude-haiku-9")
+    assert lanes("claude-sonnet-9") == [QWEN, MIMO, "claude-sonnet-9"], lanes("claude-sonnet-9")
+    assert lanes("claude-opus-9") == [QWEN, MIMO, "claude-sonnet-9", "claude-opus-9"], lanes("claude-opus-9")
+    cfg["paid_ladder"] = []                                          # no rung: the pin comparison stays strict
+    got = r.pick("code", "intern", [], False, [], "opus", "claude-haiku-9")
+    assert got["model"] is None and got["reason"].startswith("blocked:"), got
+    got = r.pick("code", "intern", [], False, [], "sonnet", "claude-haiku-9")
+    assert got["model"] is None and got["reason"].startswith("blocked:"), got
+
+
+def check_team_skill_flags():
+    """M6: principal and super carry skills brainstorm and agent-comms in the data, the built-in
+    defaults and the doc tables. lanes and assign emit both on every team rung."""
+    r = load("hermes-dispatch-route")
+    cfg = json.loads(r.ROUTING_FILE.read_text())
+    tiers = cfg["tiers"]
+    assert tiers["principal"]["skills"] == ["brainstorm", "agent-comms", "team", "manager"], tiers["principal"]
+    assert tiers["super"]["skills"] == ["brainstorm", "agent-comms"], tiers["super"]
+    default = (r.DEFAULT_ROUTING["tiers"]["principal"]["skills"], r.DEFAULT_ROUTING["tiers"]["super"]["skills"])
+    assert default == (["brainstorm", "agent-comms", "team", "manager"], ["brainstorm", "agent-comms"]), default
+    skill_dir = Path(tool_path("hermes-dispatch-route")).resolve().parent.parent
+    doc = (skill_dir / "SKILL.md").read_text()
+    for tier in ("principal", "super"):
+        row = next(line for line in doc.splitlines() if line.startswith(f"| {tier} |"))
+        listed = row.split("|")[3].strip()
+        assert listed == ", ".join(tiers[tier]["skills"]), (tier, listed)
+    mech = (skill_dir / "references" / "routing-mechanics.md").read_text()
+    for tier in ("principal", "super"):
+        assert "skills " + ", ".join(tiers[tier]["skills"]) in mech, tier
+    MIMO, KIMI = "XiaomiMiMo/MiMo-V2.6-Pro-MOPD", "moonshotai/Kimi-K3"
+    r.resolve_latest = lambda *a: {"opus": "claude-opus-9", "sonnet": "claude-sonnet-9",
+                                   "haiku": "claude-haiku-9", "sol": "x"}
+    r.inflight_counts = lambda: {}
+    world = {"rank": {MIMO: 5, KIMI: 6}, "routes": {"code": [MIMO, KIMI]}, "paid_ladder": ["opus"],
+             "tier_floor": {"principal": MIMO, "super": None},
+             "paid_floor": {"principal": "opus", "super": "opus"},
+             "tiers": {"principal": tiers["principal"], "super": tiers["super"]}, "features": {}}
+    r.routing = lambda: world
+    r.flatiron_status = lambda *a: {m: {"ok": True} for m in world["rank"]}
+    out = r.lanes("code", "principal", [], [])
+    assert [x.get("team_size") for x in out] == [3, 3, None], out
+    for x in out:
+        assert "-s brainstorm -s agent-comms" in x["flags"], x
+    a = r.assign([("n1", "code", "super", [])])
+    assert a[0].get("team_size") == 3 and "-s brainstorm -s agent-comms" in a[0]["flags"], a
+
+
 if __name__ == "__main__":
     os.environ["HERMES_DISPATCH_LEDGER"] = NO_LEDGER   # the live ledger never touches a check
     check_route(); check_tiers(); check_effort_clamp(); check_effort_round_down(); check_effort_unknown_names(); check_lanes(); check_needs(); check_default_features()
@@ -2145,4 +2328,7 @@ if __name__ == "__main__":
     check_pin_contract_pick_assign_lanes()
     check_unhealthy_floor(); check_caller_cap(); check_team_size()
     check_ledger_verdict(); check_new_id_sync(); check_recovered_model()
+    check_ledger_window(); check_sync_stdout_json(); check_ladder_fresh_routing()
+    check_features_probe_gate(); check_ranked_features()
+    check_caller_cap_paid_strength(); check_team_skill_flags()
     print("selftest OK")

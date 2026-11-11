@@ -37,8 +37,9 @@ fits, the local rungs start at the strongest healthy fitting local model below i
 then follow at the paid floor, which never drops.
 A flatiron model entry (features[model]) may carry "ladder": false and is then never a rung; a missing key
 means on the ladder. gpt-6.1-sol and any family outside paid_ladder are never rungs. Failed ids and
-unhealthy flatiron models are skipped. A ledger demotion (3 rows of this KIND with the exact verdict
-'failed'; no other verdict counts) drops a rung, and
+unhealthy flatiron models are skipped. A ledger demotion (the last 3 counted rows of this KIND all
+with the exact verdict 'failed'; rows with verdict missed-defects, blocked or interrupted are
+ignored and any other verdict in the window clears the drop) drops a rung, and
 when every rung is demoted the unskipped ladder is served with a note. No rung at all is `blocked`: one
 line with the healthy free models and their features plus the paid models, and exit code 3.
 Pin rules (unchanged): `--pin MODEL` is the explicit pin (delegate_task calls it `pin_model`): MODEL is the
@@ -149,7 +150,8 @@ DEFAULT_ROUTING = {"rank": {}, "routes": {}, "paid_ladder": ["haiku", "sonnet", 
                    "tiers": {"intern":    {"reasoning_effort": "low",    "skills": [], "fallback": ["haiku", "sonnet"]},
                              "junior":    {"reasoning_effort": "high",   "skills": [], "fallback": ["haiku", "sonnet", "opus"]},
                              "senior":    {"reasoning_effort": "high",   "skills": ["brainstorm"], "fallback": ["sonnet", "opus"]},
-                             "principal": {"reasoning_effort": "high",   "skills": ["brainstorm", "team", "manager"], "fallback": ["opus"]}}}
+                             "principal": {"reasoning_effort": "high",   "skills": ["brainstorm", "agent-comms", "team", "manager"], "fallback": ["opus"]},
+                             "super":     {"reasoning_effort": "high",   "skills": ["brainstorm", "agent-comms"], "fallback": ["opus"]}}}
 
 
 def routing():
@@ -432,6 +434,8 @@ def _flatiron_flags(m, tcfg, cfg):
 
 
 LEDGER_OVERRIDE = "HERMES_DISPATCH_LEDGER"
+# The ledger verdicts the drop ignores: no run outcome, so the row never enters the window.
+_LEDGER_IGNORED = frozenset({"missed-defects", "blocked", "interrupted"})
 
 
 def _norm_model(m):
@@ -440,10 +444,10 @@ def _norm_model(m):
 
 
 def _ledger_dead(kind):
-    """Models with 3 counted ledger rows for this kind, keyed by normalized id. A row counts only
-    when its verdict string is exactly 'failed': missed-defects, blocked, interrupted, hung and
-    fabricated never count toward the drop. A missing file or a bad line gives no entry: the ledger
-    never crashes pick."""
+    """Models whose last 3 counted rows for this kind are all exactly 'failed', keyed by
+    normalized id. Rows with verdict missed-defects, blocked or interrupted are ignored; the
+    window is the last 3 remaining rows and a later success clears the drop. A missing file or a
+    bad line gives no entry: the ledger never crashes pick."""
     try:
         lines = Path(os.environ.get(LEDGER_OVERRIDE) or SIDECAR_DIR / "outcomes.jsonl").read_bytes().splitlines()
     except OSError:
@@ -455,12 +459,12 @@ def _ledger_dead(kind):
             m, k, v = row["model"], row["kind"], row["verdict"]
         except (ValueError, KeyError, TypeError):
             continue  # a missing or bad line never crashes pick: skip the line
-        if k == kind and isinstance(m, str) and isinstance(v, str):
+        if k == kind and isinstance(m, str) and isinstance(v, str) and v not in _LEDGER_IGNORED:
             hist.setdefault(_norm_model(m), []).append(v)
     out = {}
     for m, vs in hist.items():
-        strikes = [v for v in vs if v == "failed"]  # only the exact verdict 'failed' is a strike
-        out[m] = len(strikes) >= 3
+        window = vs[-3:]                     # the last 3 remaining rows, not a lifetime count
+        out[m] = len(window) == 3 and all(v == "failed" for v in window)
     return out
 
 
@@ -575,11 +579,11 @@ def ladder(needs=None, failed=(), tier=None, pinned=None, caller=None):
     ever run at, snapped to what its efforts map accepts (None = no cap). gpt-6.1-sol and any
     family outside paid_ladder are never rungs. A failed paid discovery drops the paid rungs; it
     never blocks these local ones."""
+    health = flatiron_status(False)   # discovery and auto-sync first: one dispatch reads fresh config
     cfg = routing()
     needs = set(needs or ())
     failed = {m for a in (failed or ()) for m in (a.split(",") if isinstance(a, str) else [a]) if m}
     feats = _features_view(cfg)
-    health = flatiron_status(False)
 
     def fits(model, fam=None):
         f = _entry_for(feats, model, fam)
@@ -654,16 +658,20 @@ def _rung_flags(provider, model, tcfg, cfg):
             else f"--provider {provider} -m {model}" + "".join(f" -s {s}" for s in tcfg.get("skills", [])))
 
 
+# One strength order for the paid families, the tail of Qwen < GLM < MiMo < Kimi-K3 < Haiku <
+# Sonnet < Opus. The caller cap and pin comparisons use it, never the enabled paid_ladder order.
+_PAID_STRENGTH = ("haiku", "sonnet", "opus")
+
+
 def _ladder_key(cfg, provider, model):
     """A rung's position on the ladder: flatiron by rank (an unranked model before every ranked
-    one), then the paid families in paid_ladder order; sol and unknown families sort last. A paid
-    model's family is its resolved id first, the id shape second."""
+    one), then the paid families in the fixed strength order; sol and unknown families sort last.
+    A paid model's family is its resolved id first, the id shape second."""
     if provider == "flatiron":
         return (0, cfg["rank"].get(model, 0))
-    fams = list(cfg.get("paid_ladder", DEFAULT_ROUTING["paid_ladder"]))
     fam = (_paid_family(model)
            or next((f for f, mid in _latest_soft().items() if mid == model), ""))
-    return (1, fams.index(fam) if fam in fams else len(fams))
+    return (1, _PAID_STRENGTH.index(fam) if fam in _PAID_STRENGTH else len(_PAID_STRENGTH))
 
 
 def _paid_family(model):
@@ -729,8 +737,8 @@ def blocked_line(kind, tier, failed, needs, cfg, health, latest):
 
 
 def pick(kind, tier, failed, refresh, needs=None, pin=None, caller=None):
+    flatiron_status(refresh)   # discovery and auto-sync first: a fresh probe before any config read
     cfg, tcfg, needs = _pick_setup(kind, tier, needs)
-    flatiron_status(refresh)   # a --refresh pick re-probes before the ladder reads health
     failed = {m for arg in (failed or []) for m in arg.split(",") if m}  # --failed MODEL ... or MODEL,... list
     _check_ids("--failed", failed)
     skipped = []
@@ -779,9 +787,8 @@ def lanes(kind, tier, failed, needs, pin=None, refresh=False, caller=None):
     MODEL and continues up the ladder from MODEL's position (the rungs above it). No rung: an
     empty list, and the CLI reports blocked. caller: the parent session's model, the cap.
     Health: cached probe, or a fresh one on --refresh."""
+    flatiron_status(refresh)   # discovery and auto-sync first: a fresh probe before any config read
     cfg, tcfg, needs = _pick_setup(kind, tier, needs)
-    if refresh:
-        flatiron_status(True)   # a --refresh lanes re-probes before the ladder reads health
     _check_ids("--failed", failed)
     sk = []
     if pin:
@@ -843,7 +850,7 @@ def _stamp_write(own):
     try:
         (SIDECAR_DIR / "fallback-stamp.json").write_text(json.dumps(own))
     except OSError as e:
-        print(f"config: fallback stamp not written: {_san(e)}; the next sync keeps every live entry")
+        print(f"config: fallback stamp not written: {_san(e)}; the next sync keeps every live entry", file=sys.stderr)
 
 
 def _job_model(argv):
@@ -899,8 +906,7 @@ def assign(specs, pin=None, refresh=False, caller=None):
     beyond the caller cap: a rung serves every node that fits its eligibility. `--pin MODEL` gives
     every node exactly MODEL, under pick's pin rules per node (a pin above the caller cap is
     blocked). A node with no rung gets the blocked line and no model. Team rungs carry team_size."""
-    if refresh:
-        flatiron_status(True)   # a --refresh assign re-probes before the ladder reads health
+    flatiron_status(refresh)   # discovery and auto-sync first: a fresh probe before any config read
     counts = inflight_counts()
     out = []
     for node, kind, tier, needs in specs:
@@ -1122,16 +1128,16 @@ def sync_features(health, listed):
         changed = False
         for (m, reprobe), f in got.items():
             if f is None:
-                print(f"features: {m} probe failed; " + ("old entry kept" if reprobe else "no entry") + "; retry next sync")
+                print(f"features: {m} probe failed; " + ("old entry kept" if reprobe else "no entry") + "; retry next sync", file=sys.stderr)
                 continue
             entry = dict(feats.get(m) or {})
             entry.update({"vision": f["vision"], "web": False, "probed": f["probed"]})  # flatiron: web=False
             feats[m] = entry
             changed = True
-            print(f"features: {m} vision={entry['vision']} web=False probed={entry['probed']}" + (" (re-probe)" if reprobe else ""))
+            print(f"features: {m} vision={entry['vision']} web=False probed={entry['probed']}" + (" (re-probe)" if reprobe else ""), file=sys.stderr)
         if changed:
             if _sha256(ROUTING_FILE) != before:  # never republish a stale read over a live edit
-                print("routing json changed during sync, not published")
+                print("routing json changed during sync, not published", file=sys.stderr)
                 return
             cfg["features"] = feats
             write_routing(cfg)
@@ -1154,16 +1160,16 @@ def _run_ranker(provider, model, rank, listed, timeout=600):
                             "--provider", provider, "-m", model, "-q", prompt, "-Q"],
                            capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        print(f"rank: ranker {model} timed out; retry next sync")
+        print(f"rank: ranker {model} timed out; retry next sync", file=sys.stderr)
         return None
     if p.returncode != 0:
-        print(f"rank: ranker {model} exited {p.returncode}; retry next sync")
+        print(f"rank: ranker {model} exited {p.returncode}; retry next sync", file=sys.stderr)
         return None
     out = p.stdout.strip()
     try:
         return json.loads(out[out.index("{"):out.rindex("}") + 1])
     except ValueError:
-        print(f"rank: ranker reply is not a JSON object: {out[:200]!r}")
+        print(f"rank: ranker reply is not a JSON object: {out[:200]!r}", file=sys.stderr)
         return None
 
 
@@ -1229,7 +1235,7 @@ def _drop_retired(cfg, listed):
             for lst in (cfg.get("routes") or {}).values():
                 if m in lst:
                     lst[:] = [x for x in lst if x != m]
-            print(f"rank: dropped {m}: not listed for {days} days")
+            print(f"rank: dropped {m}: not listed for {days} days", file=sys.stderr)
     if keep != seen:
         _write_file_atomic(side, json.dumps(keep, indent=1))
     return dropped
@@ -1246,7 +1252,7 @@ def _count_reject(att, state, why):
     att["attempts"] = att.get("attempts", 0) + 1
     _write_file_atomic(state, json.dumps(att))
     retry = "retry next sync" if att["attempts"] < 3 else "no retry until the unranked set changes"
-    print(f"rank: {_san(why)}; attempt {att['attempts']}/3, {retry}")
+    print(f"rank: {_san(why)}; attempt {att['attempts']}/3, {retry}", file=sys.stderr)
 
 
 FLOORED = ("code", "debug", "research", "frontend")
@@ -1273,12 +1279,12 @@ def _place_routes(cfg, health):
                 if not anchor:
                     if kind not in warned:
                         warned.add(kind)
-                        print(f"routes: floors has no entry for {kind}; {kind} takes no new model")
+                        print(f"routes: floors has no entry for {kind}; {kind} takes no new model", file=sys.stderr)
                     continue
                 if anchor not in rank:
                     if kind not in warned:
                         warned.add(kind)
-                        print(f"routes: floor anchor {anchor} ranks no more; {kind} takes no new model")
+                        print(f"routes: floor anchor {anchor} ranks no more; {kind} takes no new model", file=sys.stderr)
                     continue
                 if rank[m] < rank[anchor]:
                     continue
@@ -1287,7 +1293,7 @@ def _place_routes(cfg, health):
                 if rank.get(cur, 0) > rank[m]:
                     at = i + 1
             lst.insert(at, m)
-            print(f"routes: {kind} takes {m}")
+            print(f"routes: {kind} takes {m}", file=sys.stderr)
 
 
 def _place_no_rank(cfg, health, before, dropped):
@@ -1300,18 +1306,20 @@ def _place_no_rank(cfg, health, before, dropped):
     except Exception as e:
         # a placement crash is not a ranker reject: no budget burn, the routes stay untouched
         cfg["routes"] = routes0
-        print(f"routes: {type(e).__name__} in _place_routes, routes unchanged: {_san(e)}")
+        print(f"routes: {type(e).__name__} in _place_routes, routes unchanged: {_san(e)}", file=sys.stderr)
     if not (dropped or cfg.get("routes") != routes0):
         return
     if _sha256(ROUTING_FILE) != before:
-        print("routing json changed during sync, not published")
+        print("routing json changed during sync, not published", file=sys.stderr)
     elif not _publish_rank(cfg):
-        print("rank: drop of retired ranks or new placement failed the selftest gate; retry next sync")
+        print("rank: drop of retired ranks or new placement failed the selftest gate; retry next sync", file=sys.stderr)
 
 
 def sync_rank(latest, health, listed):
     """D4: a listed model with no rank triggers one ranker run; only a gated order is written (F1),
-    and a ranked model the gateway lists no more drops out after 7 days (F2)."""
+    and a ranked model the gateway lists no more drops out after 7 days (F2). D7: a new id joins
+    the rank map only after its features probe wrote an entry; a failed probe leaves the id out of
+    the order and sync_features retries it next cycle."""
     if routing() is DEFAULT_ROUTING:
         return
     with _routing_lock():
@@ -1319,7 +1327,8 @@ def sync_rank(latest, health, listed):
         cfg = routing()
         rank, feats = cfg["rank"], cfg.get("features") or {}
         dropped = _drop_retired(cfg, listed)   # mutates cfg["rank"]; the map heals as models go
-        unranked = sorted(m for m in listed if m not in rank)
+        ready = [m for m in listed if m in feats]   # probed ids only: the listing minus unprobed ones
+        unranked = sorted(m for m in ready if m not in rank)
         if not unranked:
             _place_no_rank(cfg, health, before, dropped)
             return
@@ -1332,17 +1341,17 @@ def sync_rank(latest, health, listed):
             att = {}
         except ValueError:
             att = {}
-            print("ranker-rejects: malformed, reset")
+            print("ranker-rejects: malformed, reset", file=sys.stderr)
         if not isinstance(att, dict):
-            print("ranker-rejects: malformed, reset")
+            print("ranker-rejects: malformed, reset", file=sys.stderr)
             att = {"models": unranked, "attempts": 0}
         elif att.get("models") != unranked:
             att = {"models": unranked, "attempts": 0}
         elif type(att.get("attempts", 0)) is not int or att.get("attempts", 0) < 0:
-            print("ranker-rejects: malformed, reset")   # a bad attempts value: no crash, no free paid runs
+            print("ranker-rejects: malformed, reset", file=sys.stderr)   # a bad attempts value: no crash, no free paid runs
             att = {"models": unranked, "attempts": 0}
         if att.get("attempts", 0) >= 3:
-            print(f"rank: 3 rejected ranker runs already for {unranked}; no retry until the unranked set changes")
+            print(f"rank: 3 rejected ranker runs already for {unranked}; no retry until the unranked set changes", file=sys.stderr)
             _place_no_rank(cfg, health, before, dropped)
             return
         prov, rmodel = None, None  # strongest healthy flatiron model with web true, else the Claude rungs
@@ -1355,21 +1364,21 @@ def sync_rank(latest, health, listed):
                     prov, rmodel = CLAUDE, latest[fam]
                     break
         if not rmodel:
-            print("rank: no ranker available (no healthy web-capable model); retry next sync")
+            print("rank: no ranker available (no healthy web-capable model); retry next sync", file=sys.stderr)
             _place_no_rank(cfg, health, before, False)   # placement only: this path never published a bare drop
             return
         # After the ranker call each outcome is one accepted order or one counted attempt. The live
         # json is written only through _publish_rank, so a bad run leaves it untouched. No exception
         # escapes sync_rank.
         try:
-            reply = _run_ranker(prov, rmodel, rank, listed)
+            reply = _run_ranker(prov, rmodel, rank, ready)
             if reply is None:
                 _count_reject(att, state, f"no usable order from {rmodel} (timeout, error exit or non-JSON reply)")
                 _place_no_rank(cfg, health, before, dropped)
                 return
             order = reply.get("order", reply) if isinstance(reply, dict) else reply
             reasons = (reply.get("reasons") or {}) if isinstance(reply, dict) else {}
-            want = set(rank) | set(listed)
+            want = set(rank) | set(ready)
             got = order.keys() if isinstance(order, dict) else ()
             # every value must be a rank int: True counts as 1 and "1" raises TypeError on sorted()
             if (not isinstance(order, dict) or got != want
@@ -1381,11 +1390,11 @@ def sync_rank(latest, health, listed):
                 return
             if isinstance(reasons, dict) and reasons:  # untrusted: validate the order first, log sanitized
                 for m, line in reasons.items():
-                    print(f"rank: {_san(m)}: {_san(line)}")
+                    print(f"rank: {_san(m)}: {_san(line)}", file=sys.stderr)
             else:
-                print("rank: no reasons")
+                print("rank: no reasons", file=sys.stderr)
             if _sha256(ROUTING_FILE) != before:  # the ranker ran on a stale read: no write, no budget burn
-                print("routing json changed during sync, not published")
+                print("routing json changed during sync, not published", file=sys.stderr)
                 _place_no_rank(cfg, health, before, dropped)
                 return
             stamp = time.strftime("%Y-%m-%d")
@@ -1400,10 +1409,10 @@ def sync_rank(latest, health, listed):
             except Exception as e:
                 # a placement crash is not a ranker reject: no budget burn, the accepted ranks still publish
                 cfg["routes"] = routes0
-                print(f"routes: {type(e).__name__} in _place_routes, routes unchanged: {_san(e)}")
+                print(f"routes: {type(e).__name__} in _place_routes, routes unchanged: {_san(e)}", file=sys.stderr)
             if _publish_rank(cfg):
                 best = sorted(order.items(), key=lambda kv: -kv[1])
-                print("rank: accepted order from " + rmodel + ": " + ", ".join(f"{m}={r}" for m, r in best))
+                print("rank: accepted order from " + rmodel + ": " + ", ".join(f"{m}={r}" for m, r in best), file=sys.stderr)
                 with contextlib.suppress(OSError):
                     state.unlink()  # an accepted order resets the reject budget
             else:
@@ -1453,10 +1462,10 @@ def sync(refresh):
             try:
                 p = subprocess.run([hermes, "config", "get", k], capture_output=True, text=True, timeout=60)
             except subprocess.TimeoutExpired:
-                print(f"config: hermes config get {k} timed out; sync failed, config unchanged")
+                print(f"config: hermes config get {k} timed out; sync failed, config unchanged", file=sys.stderr)
                 return 1
             if p.returncode != 0 and "Config key not set" not in p.stderr:
-                print(f"config: hermes config get {k} exited {p.returncode}: {_san(p.stderr)}; sync failed, config unchanged")
+                print(f"config: hermes config get {k} exited {p.returncode}: {_san(p.stderr)}; sync failed, config unchanged", file=sys.stderr)
                 return 1
             cur[k] = p.stdout.strip()  # an unset key reads as empty; the write below defines it
         # user carve-out: keep the live entries the stamp shows sync did not write (user-named,
@@ -1502,10 +1511,10 @@ def sync(refresh):
                         subprocess.run(([hermes, "config", "set", rkey, old] if old
                                         else [hermes, "config", "unset", rkey]),
                                        check=True, capture_output=True, timeout=60)
-                        print(f"config: restored {rkey} = {_san(old) or 'unset'}")
+                        print(f"config: restored {rkey} = {_san(old) or 'unset'}", file=sys.stderr)
                     except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError):
-                        print(f"config: restore of {rkey} FAILED; config may hold a partial update")
-                print(f"config: hermes config set {key} {what} after {len(applied)} attempt(s); sync failed")
+                        print(f"config: restore of {rkey} FAILED; config may hold a partial update", file=sys.stderr)
+                print(f"config: hermes config set {key} {what} after {len(applied)} attempt(s); sync failed", file=sys.stderr)
                 return 1
             changed.append(f"{key}={val}")
         _stamp_write(own)   # after the writes: a rolled-back transaction keeps the old stamp
