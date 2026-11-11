@@ -1354,17 +1354,10 @@ def sync_rank(latest, health, listed):
             print(f"rank: 3 rejected ranker runs already for {unranked}; no retry until the unranked set changes", file=sys.stderr)
             _place_no_rank(cfg, health, before, dropped)
             return
-        prov, rmodel = None, None  # strongest healthy flatiron model with web true, else the Claude rungs
-        cands = [m for m in rank if health.get(m, {}).get("ok") and (feats.get(m) or {}).get("web")]
-        if cands:
-            prov, rmodel = "flatiron", max(cands, key=lambda m: rank[m])
-        else:
-            for fam in ("opus", "sonnet", "haiku"):
-                if latest.get(fam):
-                    prov, rmodel = CLAUDE, latest[fam]
-                    break
+        # the ranker is the one web-search exception to the research split: the Haiku rung only
+        prov, rmodel = (CLAUDE, claude_id(latest, "haiku")) if latest.get("haiku") else (None, None)
         if not rmodel:
-            print("rank: no ranker available (no healthy web-capable model); retry next sync", file=sys.stderr)
+            print("rank: no ranker available (no live Haiku id); retry next sync", file=sys.stderr)
             _place_no_rank(cfg, health, before, False)   # placement only: this path never published a bare drop
             return
         # After the ranker call each outcome is one accepted order or one counted attempt. The live

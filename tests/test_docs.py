@@ -109,6 +109,22 @@ TIERED_ANCHORS = {
     TIERED_MECHANICS_MD: "## `pick` and `lanes`\n",
 }
 
+# The Haiku web rule of the tiered skill: the router's ranker is the one documented
+# exception and runs on Haiku. Each phrase must sit on one line of SKILL.md.
+SKILL_RULES = {
+    "haiku ranker exception": ("One documented exception is the `hermes-dispatch-route` ranker",
+                               "one Haiku child both searches and ranks"),
+}
+
+
+def skill_md_findings(text):
+    findings = []
+    for rule, phrases in SKILL_RULES.items():
+        for phrase in phrases:
+            if phrase not in text:
+                findings.append(f"SKILL.md misses the {rule} rule: {phrase}")
+    return findings
+
 
 def install_findings(text):
     """One finding per missing or broken INSTALL.md rule; empty when complete."""
@@ -215,6 +231,9 @@ def build_mutations():
         mutations.append((name, rel,
                           lambda t, n=name, tk=token: tiered_claim_findings(t, n, tk),
                           lambda root, t, a=anchor, tk=token: t.replace(a, a + tk + "\n", 1)))
+    for rule, phrases in SKILL_RULES.items():
+        mutations.append((rule, TIERED_SKILL_MD, skill_md_findings,
+                          lambda root, t, ph=phrases: drop_lines(t, *ph)))
     return mutations
 
 
@@ -223,6 +242,7 @@ def test_install_pins_pass_on_the_repo_files():
     assert readme_findings(README.read_text()) == [], readme_findings(README.read_text())
     assert script_absence_findings(REPO_ROOT) == [], script_absence_findings(REPO_ROOT)
     assert tiered_docs_findings() == [], tiered_docs_findings()
+    assert skill_md_findings((REPO_ROOT / TIERED_SKILL_MD).read_text()) == []
 
 
 def test_install_pins_fail_when_the_rule_is_removed(tmp_path):
@@ -250,9 +270,10 @@ def test_install_pins_fail_when_the_rule_is_removed(tmp_path):
 def main():
     tmp = Path(tempfile.mkdtemp(prefix="doc-pins-"))
     mutations = build_mutations()
-    pins = len(INSTALL_RULES) + len(FORBIDDEN_TOKENS) + len(README_RULES) + len(RETIRED_CLAIMS) + 2
+    pins = len(INSTALL_RULES) + len(FORBIDDEN_TOKENS) + len(README_RULES) + len(RETIRED_CLAIMS) + len(SKILL_RULES) + 2
     print(f"pins: {pins} (install rules {len(INSTALL_RULES)}, forbidden {len(FORBIDDEN_TOKENS)}, "
-          f"readme rules {len(README_RULES)}, retired claims {len(RETIRED_CLAIMS)}, pointer + script absence 2)")
+          f"readme rules {len(README_RULES)}, retired claims {len(RETIRED_CLAIMS)}, "
+          f"skill rules {len(SKILL_RULES)}, pointer + script absence 2)")
     test_install_pins_pass_on_the_repo_files()
     test_install_pins_fail_when_the_rule_is_removed(tmp)
     print(f"mutations: {len(mutations)}/{len(mutations)} failed loud")

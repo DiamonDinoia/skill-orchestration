@@ -361,7 +361,7 @@ def check_sync_rank():
         side = Path(d, "cache", "dispatch-route")   # the real shape: sidecars off the json dir
         r.SIDECAR_DIR = side
         health = {"a/Top": {"ok": True}, "b/Mid": {"ok": True}, "n/New": {"ok": True}, "x/Z": {"ok": True}}
-        latest = {"opus": "claude-opus-9"}
+        latest = {"opus": "claude-opus-9", "haiku": "claude-haiku-9"}
         # no new model for the given listing: the ranker never runs (count calls: sync_rank swallows raises)
         calls = []
         r._run_ranker = lambda *a, **k: calls.append(a) or (_ for _ in ()).throw(AssertionError("ranker ran"))
@@ -378,12 +378,14 @@ def check_sync_rank():
         before = rj.read_text()
         seen = []
         r._selftest_ok = lambda cand: seen.append((rj.read_text(), Path(cand).read_text())) or True
-        r._run_ranker = lambda *a, **k: {"a/Top": 3, "n/New": 2, "b/Mid": 1}
+        picked = []
+        r._run_ranker = lambda *a, **k: picked.append(a[:2]) or {"a/Top": 3, "n/New": 2, "b/Mid": 1}
         r.sync_rank(latest, health, ["a/Top", "b/Mid", "n/New"])
         got = json.loads(rj.read_text())
         assert got["rank"] == {"a/Top": 3, "n/New": 2, "b/Mid": 1}, got
         assert seen and seen[0][0] == before, "the live json must still be the old text at gate time"
         assert json.loads(seen[0][1])["rank"] == {"a/Top": 3, "n/New": 2, "b/Mid": 1}, "the gate must see the candidate order"
+        assert picked == [(r.CLAUDE, "claude-haiku-9")], picked   # the Haiku rung ranks, never Opus or flatiron
         backups = sorted(side.glob("routing.json.20??-??-??*"))
         assert len(backups) == 1 and backups[0].read_text() == before, [p.name for p in Path(d).iterdir()]
         # a selftest failure on the new order leaves the live json byte for byte and no candidate
@@ -442,6 +444,13 @@ def check_sync_rank():
         assert len(list(side.glob(rj.name + ".20??-??-??*"))) == nbackup, "a stale abort writes no backup"
         assert not (side / (rj.name + ".ranker-rejects")).exists(), "a stale abort must not burn ranker budget"
 
+        # the web-search rule is Haiku-only: with no Haiku id the ranker never runs, Opus is no substitute
+        r._place_no_rank = lambda *a, **k: None
+        opus_only = []
+        r._run_ranker = lambda *a, **k: opus_only.append(a)
+        r.sync_rank({"opus": "claude-opus-9"}, health, ["a/Top", "b/Mid", "n/New"])
+        assert opus_only == [], opus_only
+
 
 def check_sync_rank_gates():
     r = load("hermes-dispatch-route")
@@ -456,7 +465,7 @@ def check_sync_rank_gates():
         side = Path(d, "cache", "dispatch-route")   # the real shape: sidecars off the json dir
         r.SIDECAR_DIR = side
         health = {m: {"ok": True} for m in ("a/Top", "b/Mid", "n/New", "y/New2", "z/New3")}
-        latest = {"opus": "claude-opus-9"}
+        latest = {"opus": "claude-opus-9", "haiku": "claude-haiku-9"}
         calls = []
         def counted(order):    # a fresh budget per case, so every case must reach the ranker
             def _(*a, **k):
@@ -524,7 +533,7 @@ def check_sync_rank_gate_crash():
         side = Path(d, "cache", "dispatch-route")   # the real shape: sidecars off the json dir
         r.SIDECAR_DIR = side
         health = {m: {"ok": True} for m in ("a/Top", "b/Mid", "n/New")}
-        latest = {"opus": "claude-opus-9"}
+        latest = {"opus": "claude-opus-9", "haiku": "claude-haiku-9"}
         # a valid order, then the gate itself raises after it saw the candidate: the live json must
         # stay byte for byte and one attempt is counted (no exception leaves sync_rank)
         r._run_ranker = lambda *a, **k: {"a/Top": 3, "b/Mid": 1, "n/New": 2}
@@ -558,7 +567,7 @@ def check_sync_rank_budget():
         r.SIDECAR_DIR = side
         state = side / (rj.name + ".ranker-rejects")
         health = {m: {"ok": True} for m in ("a/Top", "b/Mid", "n/New", "y/New2")}
-        latest = {"opus": "claude-opus-9"}                    # no web-capable flatiron model -> the Claude rung ranks
+        latest = {"opus": "claude-opus-9", "haiku": "claude-haiku-9"}   # the Haiku rung ranks
         lst = ["a/Top", "b/Mid", "n/New"]                     # unranked part: ["n/New"]
         r._selftest_ok = lambda *_: True
 
@@ -776,7 +785,7 @@ def check_sync_rank_reasons():
         r.SIDECAR_DIR = side
         state = side / (rj.name + ".ranker-rejects")
         health = {m: {"ok": True} for m in ("a/Top", "b/Mid", "n/New", "y/New2")}
-        latest = {"opus": "claude-opus-9"}
+        latest = {"opus": "claude-opus-9", "haiku": "claude-haiku-9"}
         r._selftest_ok = lambda *_: True
         # a {order, reasons} reply: every reason line lands in the log, the order is accepted
         r._run_ranker = lambda *a, **k: {"order": {"a/Top": 3, "b/Mid": 1, "n/New": 2},
@@ -839,7 +848,7 @@ def check_sync_rank_routes():
         r.ROUTING_FILE = rj
         r.SIDECAR_DIR = side
         r._selftest_ok = lambda *_: True
-        latest = {"opus": "claude-opus-9"}
+        latest = {"opus": "claude-opus-9", "haiku": "claude-haiku-9"}
         def sync(cfg, listed, order, ok=True):
             """One sync_rank with a stubbed ranker (order None = no usable reply). File bytes."""
             cfg.setdefault("features", {}).update({m: {"vision": False, "web": False} for m in listed})   # the probes succeeded
