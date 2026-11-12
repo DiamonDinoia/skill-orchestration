@@ -164,9 +164,11 @@ Gate an irreversible final step in the brief, never in a later steer. Irreversib
 
 ## Inspection
 
-Inspection is event-driven. Events are a child's deadline passing, or the user asking. The inspector is a cheap read-only subagent. It reads the transcript tail and checks the liveness of the child's processes. It reports at most 5 lines: liveness, transcript state, and the provider and model the transcript shows. Liveness is running, not running or unknown. Transcript state is progressing, waiting or hung. A silent fallback can change a child's behaviour mid-run. A fallback child stalled with no artifacts is rescheduled, not trusted on its own status text. Transcript silence alone never stops a child.
+Inspection is event-driven. Events are a child's deadline passing, the user asking, or a `[ASYNC DELEGATION CHECKPOINT]` notice. The inspector is a cheap read-only subagent. It reads the transcript tail and checks the liveness of the child's processes. It reports at most 5 lines: liveness, transcript state, and the provider and model the transcript shows. Liveness is running, not running or unknown. Transcript state is progressing, waiting or hung. A silent fallback can change a child's behaviour mid-run. A fallback child stalled with no artifacts is rescheduled, not trusted on its own status text. Transcript silence alone never stops a child.
 
 Steer a running child at any time. `steer` works only on a live child. Check `delegate_task(action='list')` first, because a finished child's id is dead. A new requirement aimed at a finished child becomes a fresh follow-up job. Its brief points at the first job's notes and artifacts. Treat a completion entry that reports a missed steer the same way. Then update the graph so gates wait for the follow-up.
+
+The checkpoint is a periodic wake for running children. A local patch to the harness sends the `[ASYNC DELEGATION CHECKPOINT]` notice on an interval, not the manager checking a clock. The config is `delegation.checkpoint_minutes`, default 30, 0 to turn it off. Each notice lists all running children with a transcript path and a byte offset. `references/supervision.md` holds the inspect, steer, stop and respawn ladder.
 
 A time or kill condition that the manager speaks only in prose is not a live mechanism. Schedule it as a timed steer, a control job, or a deadline the child checks.
 
@@ -213,3 +215,4 @@ Load each reference only on its trigger:
 - For child report rules, load `references/child-rules.md`.
 - For the fixup fold and per-commit build gate, load `references/fixup-fold-gate.md`.
 - To push after approval, load `references/push-after-approval.md`.
+- On a `[ASYNC DELEGATION CHECKPOINT]` notice, on a steer decision, or on a stop and respawn, load `references/supervision.md`.
