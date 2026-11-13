@@ -2,7 +2,7 @@
 name: parallel
 description: Use when the user holds an approved spec with units on disjoint files. A bare "run in parallel" request goes to spec first. Runs every unit of the spec in one run.
 license: MIT
-version: 2.3.5
+version: 2.3.6
 ---
 
 # Parallel

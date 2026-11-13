@@ -65,7 +65,7 @@ the name check. It also runs `skills/parallel/scripts/waves.py --selftest` from 
 test/run.sh   # podman, or: test/run.sh docker
 ```
 
-## Version 2.3.5
+## Version 2.3.6
 
 A web search or web fetch step runs on a Haiku child, and the `sync` ranker is the one documented
 exception: one Haiku child both searches and ranks. After a PASS the run pushes the branch and

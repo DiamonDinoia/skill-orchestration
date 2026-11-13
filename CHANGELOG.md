@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.3.6
+- Rules: the manager wakes on a `[ASYNC DELEGATION CHECKPOINT]` notice every `delegation.checkpoint_minutes` (default 30, 0 off). On each notice it dispatches one intern inspector per running child in parallel, steers a first violation, stops a defying child, and respawns it with the leftover state plus one do-not line. The full ladder is `skills/manager/references/supervision.md`.
+- Docs: the checkpoint notice is sent by a local patch to the harness, not a core setting; it is live only after a gateway restart.
+- Version fields are 2.3.6 in every manifest and skill.
+
 ## 2.3.5
 - Rules: a web search or web fetch step runs on a Haiku child. The child writes verbatim excerpts with their URLs to a scratch file and does no analysis. A flatiron child reads that file and does the analysis.
 - Dispatch: the `sync` ranker runs on the resolved Haiku id. It is the one documented exception to the web research split: one Haiku child both searches and ranks. With no live Haiku id the ranker does not run.

@@ -68,7 +68,7 @@ INSTALL_RULES = {
     "link resolves": ("`readlink -f` of the link name equals the absolute source",
                       "`test -e` of the link name exits 0"),
     "binary compile check": ("the source must compile",),
-    "version line": ('"version": "2.3.5"',),
+    "version line": ('"version": "2.3.6"',),
     "plugin list verify": ("`claude plugin list`", "`codex plugin list`", "`gemini extensions list`"),
     "update section": ("the marketplace update", "git pull in the clone"),
     "uninstall scope": ("Remove only the links that resolve into the clone", "Never delete the clone"),
@@ -89,7 +89,7 @@ FORBIDDEN_TOKENS = {
 
 README_RULES = {
     "opencode plugin note": ("OpenCode has a `plugin` subcommand", "keeps the link route"),
-    "version heading": ("## Version 2.3.5",),
+    "version heading": ("## Version 2.3.6",),
 }
 
 # The retired routing claims that must stay out of the tiered-subagent-dispatch
