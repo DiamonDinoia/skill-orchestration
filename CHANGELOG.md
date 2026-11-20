@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.7
+- Dispatch: the flatiron routing uses gpt-6.2-sol for the retired gpt-6.1-sol id, which stays only in the delegate_task pin_model note. GLM-5.3 is removed from the rank and the routes, and the probe dates of Kimi-K3, MiMo-V2.6-Pro-MOPD and Qwen3.8-27B-FP8 are 2026-11-13.
+- Version fields are 2.3.7 in every manifest and skill.
+
 ## 2.3.6
 - Rules: the manager wakes on a `[ASYNC DELEGATION CHECKPOINT]` notice every `delegation.checkpoint_minutes` (default 30, 0 off). On each notice it dispatches one intern inspector per running child in parallel, steers a first violation, stops a defying child, and respawns it with the leftover state plus one do-not line. The full ladder is `skills/manager/references/supervision.md`.
 - Docs: the checkpoint notice is sent by a local patch to the harness, not a core setting; it is live only after a gateway restart.
