@@ -36,7 +36,7 @@ Need-wins and the unhealthy floor share one rule: when no healthy local model at
 fits, the local rungs start at the strongest healthy fitting local model below it; the paid rungs
 then follow at the paid floor, which never drops.
 A flatiron model entry (features[model]) may carry "ladder": false and is then never a rung; a missing key
-means on the ladder. gpt-6.1-sol and any family outside paid_ladder are never rungs. Failed ids and
+means on the ladder. gpt-6.2-sol and any family outside paid_ladder are never rungs. Failed ids and
 unhealthy flatiron models are skipped. A ledger demotion (the last 3 counted rows of this KIND all
 with the exact verdict 'failed'; rows with verdict missed-defects, blocked or interrupted are
 ignored and any other verdict in the window clears the drop) drops a rung, and
@@ -69,7 +69,7 @@ Caller cap (user's standing order 2026-11-10): --caller MODEL names the caller's
 delegation-tiers plugin passes the parent session's model into ladder(). Every rung stronger than the
 caller model in the one strength order (rank band, then the paid families: Qwen < GLM < MiMo <
 Kimi-K3 < Haiku < Sonnet < Opus) is dropped; the same model is allowed. A pin above the cap is
-blocked, an exhausted capped ladder is blocked and never climbs past the cap, and gpt-6.1-sol is
+blocked, an exhausted capped ladder is blocked and never climbs past the cap, and gpt-6.2-sol is
 exempt (the reviewer, pin only). An unknown caller id opens no cap.
 Ranks, per-kind hints, paid_ladder and tiers live in ROUTING_FILE (JSON) so they can be tuned without
 editing code.
@@ -528,7 +528,7 @@ def paid_floor(cfg, tier):
 def _caller_key(cfg, caller):
     """The cap a caller model puts on the ladder: its own ladder key, or None for no cap. The
     router learns the caller model from the delegation-tiers plugin (the parent session's model).
-    An unknown id opens no cap (its strength cannot be compared), and gpt-6.1-sol is exempt: the
+    An unknown id opens no cap (its strength cannot be compared), and gpt-6.2-sol is exempt: the
     reviewer runs only as a pin and never writes code."""
     if not caller:
         return None
@@ -544,7 +544,7 @@ def _caller_key(cfg, caller):
 
 def _pin_over_cap(cfg, provider, model, caller):
     """True when a pin runs stronger than the caller's own model (user cap 2026-11-10): the pin is
-    blocked and no substitute is selected. The same model is allowed; gpt-6.1-sol is exempt."""
+    blocked and no substitute is selected. The same model is allowed; gpt-6.2-sol is exempt."""
     cap = _caller_key(cfg, caller)
     return cap is not None and _paid_family(model) != "sol" and _ladder_key(cfg, provider, model) > cap
 
@@ -576,7 +576,7 @@ def ladder(needs=None, failed=(), tier=None, pinned=None, caller=None):
     model is then never a rung; a missing key means on the ladder. A missing exact features entry
     falls back to the family entry; an exact entry, even empty, wins. The top effort is the
     entry's max_effort run through effective_effort(model, cap): the highest effort the rung can
-    ever run at, snapped to what its efforts map accepts (None = no cap). gpt-6.1-sol and any
+    ever run at, snapped to what its efforts map accepts (None = no cap). gpt-6.2-sol and any
     family outside paid_ladder are never rungs. A failed paid discovery drops the paid rungs; it
     never blocks these local ones."""
     health = flatiron_status(False)   # discovery and auto-sync first: one dispatch reads fresh config

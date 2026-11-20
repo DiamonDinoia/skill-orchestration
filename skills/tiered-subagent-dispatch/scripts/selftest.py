@@ -1892,7 +1892,7 @@ _LADDER_FIX_TABLE = json.dumps({
     "efforts": {MIST: ["none", "high"], QWEN: ["xhigh", "medium", "low"]}})
 # The id shape the account picker emits, bracket suffix and all.
 HAIKU_B, SONNET_B, OPUS_B = "claude-haiku-5-5[1m]", "claude-sonnet-5-5[1m]", "claude-opus-5-5[1m]"
-_LATEST_B = {"at": time.time(), "haiku": HAIKU_B, "sonnet": SONNET_B, "opus": OPUS_B, "sol": "gpt-6.1-sol"}
+_LATEST_B = {"at": time.time(), "haiku": HAIKU_B, "sonnet": SONNET_B, "opus": OPUS_B, "sol": "gpt-6.2-sol"}
 _HEALTH_B = {m: {"ok": True} for m in (MIST, QWEN, KIMI)}
 
 
@@ -2003,7 +2003,7 @@ def check_unhealthy_floor():
 def check_caller_cap():
     """D4: the caller model caps the ladder in the one strength order Qwen < GLM < MiMo <
     Kimi-K3 < Haiku < Sonnet < Opus. Stronger rungs drop, the same model is allowed, a pin above
-    the cap is blocked, an exhausted capped ladder is blocked, gpt-6.1-sol is exempt through a
+    the cap is blocked, an exhausted capped ladder is blocked, gpt-6.2-sol is exempt through a
     pin, and an unknown caller id opens no cap."""
     MIMO = "XiaomiMiMo/MiMo-V2.6-Pro-MOPD"
     r = load("hermes-dispatch-route")
@@ -2036,7 +2036,7 @@ def check_caller_cap():
         assert got["model"] is None and got["reason"].startswith("blocked:") and "caller" in got["reason"], (pin, caller, got)
     assert r.pick("code", "intern", [], False, [], MIMO, MIMO)["model"] == MIMO, "the caller's own model runs"
     sol = r.pick("code", "intern", [], False, [], "sol", QWEN)
-    assert (sol["provider"], sol["model"]) == ("openai-codex", "gpt-9-sol"), "gpt-6.1-sol is exempt through a pin"
+    assert (sol["provider"], sol["model"]) == ("openai-codex", "gpt-9-sol"), "gpt-6.2-sol is exempt through a pin"
     ln = r.lanes("code", "intern", [], [], "sol", False, QWEN)
     assert [x["model"] for x in ln] == ["gpt-9-sol"], ln            # nothing stronger sits above sol
 
